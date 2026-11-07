@@ -68,6 +68,20 @@ ICON_BOOKMARK = "\U0001f516"
 ICON_PIN = "\U0001f4cc"
 ICON_SPARKLE = "\U0001f4ab"
 ICON_ARROW = "\u27a1\ufe0f"
+
+# Telegram Premium Custom Emojis (from NewsEmoji and VickyTricks)
+CE_BOOST = '<tg-emoji emoji-id="6118531988073747281">⚡</tg-emoji>'
+CE_CHECK = '<tg-emoji emoji-id="6115942363312428399">✅</tg-emoji>'
+CE_MONEY = '<tg-emoji emoji-id="6118618471535218924">💰</tg-emoji>'
+CE_FIRE = '<tg-emoji emoji-id="6115927253617480897">🔥</tg-emoji>'
+CE_SHIELD = '<tg-emoji emoji-id="5251203410396458957">🛡</tg-emoji>'
+CE_WARN = '<tg-emoji emoji-id="6116176048188035743">⚠️</tg-emoji>'
+CE_GIFT = '<tg-emoji emoji-id="6118608485736256638">🎁</tg-emoji>'
+CE_BELL = '<tg-emoji emoji-id="5458603043203327669">🔔</tg-emoji>'
+CE_LINK = '<tg-emoji emoji-id="6116012762121377264">🔗</tg-emoji>'
+CE_CHART = '<tg-emoji emoji-id="5244837092042750681">📈</tg-emoji>'
+CE_EYE = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
+CE_CHAT = '<tg-emoji emoji-id="5443038326535759644">💬</tg-emoji>'
 WELCOME_IMAGE_PATH = _asset_path(
     os.getenv("WELCOME_IMAGE_PATH", "custom_images/welcome_home_compressed.jpg")
 )
@@ -102,7 +116,7 @@ _DB_SCHEMA_LOCK = threading.Lock()
 _DB_INITIALIZED_PATHS: set[str] = set()
 
 WELCOME = (
-    f"{ICON_SPARKLE} WELCOME TO iPAY {ICON_SPARKLE}\n\n"
+    f"{CE_BOOST} <b>WELCOME TO iPAY</b> {CE_FIRE}\n\n"
     "Your guide to wallets, payments, and support:\n\n"
     f"{ICON_BOOKMARK} Up to 4% commission on eligible completed orders\n\n"
     f"{ICON_BOOKMARK} Rewards on selected activity orders\n\n"
@@ -713,6 +727,7 @@ async def _send_home_message(message) -> None:
                     photo=file_id,
                     caption=caption,
                     reply_markup=main_keyboard(),
+                    parse_mode="HTML",
                 )
             else:
                 with WELCOME_IMAGE_PATH.open("rb") as image:
@@ -720,6 +735,7 @@ async def _send_home_message(message) -> None:
                         photo=InputFile(image),
                         caption=caption,
                         reply_markup=main_keyboard(),
+                        parse_mode="HTML",
                     )
             _remember_photo_file_id(WELCOME_IMAGE_PATH, sent_message)
             return
@@ -727,7 +743,7 @@ async def _send_home_message(message) -> None:
             log.error("Could not send the home image (%s): %s", type(exc).__name__, exc)
     else:
         log.error("Home image is missing: %s", WELCOME_IMAGE_PATH)
-    await message.reply_text(caption, reply_markup=main_keyboard())
+    await message.reply_text(caption, reply_markup=main_keyboard(), parse_mode="HTML")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -856,19 +872,20 @@ async def handle_uid_notice(
         user_tag = "Valued Member"
 
     notice_text = (
-        f"{ICON_MESSAGE} USER SUPPORT NOTICE\n\n"
-        f"{ICON_LOCATION} Target User: {user_tag}\n"
-        f"{ICON_LOCATION} User-provided UID: {uid}\n"
-        "This bot cannot verify the UID, linked wallet, withdrawal status, or queue eligibility.\n\n"
-        f"{ICON_PIN} GENERAL SAFETY REMINDERS:\n"
-        f"{ICON_CHECK} Keep passwords, OTPs, and PINs private.\n"
-        f"{ICON_CHECK} Check your receiving limit and wallet status in the app.\n"
-        f"{ICON_CHECK} Avoid duplicate payout requests while one is pending.\n\n"
-        f"{ICON_ARROW} Need manual assistance? Contact support: {SUPPORT_1} or {SUPPORT_2}."
+        f"{CE_BELL} <b>USER SUPPORT NOTICE</b> {CE_SHIELD}\n\n"
+        f"{CE_CHECK} <b>Target User:</b> {user_tag}\n"
+        f"{CE_MONEY} <b>User-provided UID:</b> {uid}\n"
+        "<i>This bot cannot verify the UID, linked wallet, withdrawal status, or queue eligibility.</i>\n\n"
+        f"{CE_WARN} <b>GENERAL SAFETY REMINDERS:</b>\n"
+        f"{CE_CHECK} Keep passwords, OTPs, and PINs private.\n"
+        f"{CE_CHECK} Check your receiving limit and wallet status in the app.\n"
+        f"{CE_CHECK} Avoid duplicate payout requests while one is pending.\n\n"
+        f"{CE_CHAT} Need manual assistance? Contact support: {SUPPORT_1} or {SUPPORT_2}."
     )
     await message.reply_text(
         notice_text,
         reply_markup=notice_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -903,11 +920,11 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     safe_support_3 = escape(SUPPORT_3)
 
     notice_text = (
-            "🚀 <b>WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!</b>\n\n"
-            f"📍 <b>User:</b> {safe_user_tag}\n"
-            f"📍 <b>UID:</b> {safe_uid}\n\n"
-            "🔰 <b>Withdrawal Status:</b> Priority Support Activated ✅\n\n"
-        )
+        f"{CE_BOOST} 🚀 <b>WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!</b> {CE_FIRE}\n\n"
+        f"{CE_CHECK} 📍 <b>User:</b> {safe_user_tag}\n"
+        f"{CE_MONEY} 📍 <b>UID:</b> {safe_uid}\n\n"
+        f"{CE_SHIELD} 🔰 <b>Withdrawal Status:</b> Priority Support Activated ✅ {CE_CHECK}\n\n"
+    )
     await message.reply_text(
         notice_text,
         parse_mode="HTML",
@@ -1744,7 +1761,7 @@ async def _replace_callback_image(
     if message.photo:
         try:
             if file_id:
-                media = InputMediaPhoto(media=file_id, caption=caption[:1024])
+                media = InputMediaPhoto(media=file_id, caption=caption[:1024], parse_mode="HTML")
                 edited_message = await query.edit_message_media(
                     media=media,
                     reply_markup=keyboard,
@@ -1754,6 +1771,7 @@ async def _replace_callback_image(
                     media = InputMediaPhoto(
                         media=InputFile(image),
                         caption=caption[:1024],
+                        parse_mode="HTML",
                     )
                     edited_message = await query.edit_message_media(
                         media=media,
@@ -1772,6 +1790,7 @@ async def _replace_callback_image(
                             media=InputMediaPhoto(
                                 media=InputFile(image),
                                 caption=caption[:1024],
+                                parse_mode="HTML",
                             ),
                             reply_markup=keyboard,
                         )
@@ -1854,7 +1873,11 @@ async def _present_callback(
         return
     if query.message.photo:
         try:
-            await query.edit_message_caption(caption=text[:1024], reply_markup=keyboard)
+            await query.edit_message_caption(
+                caption=text[:1024],
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
         except (BadRequest, TelegramError) as exc:
             if "message is not modified" in str(exc).lower():
                 return
@@ -2260,6 +2283,17 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     text = message.text.strip()
+
+    # Handle Boost keyword triggers (with typo tolerance: bost, boost, b00st, etc.)
+    boost_match = re.search(
+        r"(?i)\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\s*[:=\-#]?\s*(\d{6})\b",
+        text,
+    )
+    if boost_match:
+        extracted_uid = boost_match.group(1).strip()
+        context.args = [extracted_uid]
+        await boost_command(update, context)
+        return
 
     # Handle explicit UID requests without claiming account verification.
     # 2. UID keyword triggers in groups even without bot @mention

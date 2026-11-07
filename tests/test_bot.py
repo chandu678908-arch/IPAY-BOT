@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pymupdf
 from telegram.error import BadRequest, Conflict
@@ -1907,6 +1907,31 @@ class BotTests(unittest.TestCase):
             self.assertIn("@rajesh", notice_text)
             self.assertIn("894235", notice_text)
             self.assertIn("USER SUPPORT NOTICE", notice_text)
+
+    def test_boost_command_includes_custom_emojis(self):
+        message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
+        user = SimpleNamespace(id=333, username="test_user", first_name="Test")
+        update = SimpleNamespace(effective_message=message, effective_user=user)
+        context = SimpleNamespace(args=["749488"])
+        with patch.object(bot, "save_user_uid"):
+            asyncio.run(bot.boost_command(update, context))
+        response = message.reply_text.await_args.args[0]
+        self.assertIn("6118531988073747281", response)  # CE_BOOST
+        self.assertIn("6115942363312428399", response)  # CE_CHECK
+
+    def test_ai_reply_triggers_boost_on_typos(self):
+        message = SimpleNamespace(text="bost 789983", reply_text=AsyncMock(), message_id=123)
+        chat = SimpleNamespace(id=100, type="private")
+        user = SimpleNamespace(id=444, username="trader", first_name="Trader")
+        update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=user)
+        app = SimpleNamespace(bot_data={"guide": MagicMock()})
+        context = SimpleNamespace(application=app)
+        with patch.object(bot, "save_user_uid"):
+            asyncio.run(bot.ai_reply(update, context))
+        message.reply_text.assert_awaited_once()
+        response = message.reply_text.await_args.args[0]
+        self.assertIn("789983", response)
+        self.assertIn("WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!", response)
 
 
 if __name__ == "__main__":
