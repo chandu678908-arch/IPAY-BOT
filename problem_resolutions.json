@@ -1,0 +1,52 @@
+{
+  "_comment": "Trainable problem -> resolution map for the iPay bot. Edit this file to teach (or update) how the bot resolves user problems in the Issues menu and in AI answers. Keys starting with '_' are comments and are ignored. Each entry may have: title, resolution (step-by-step), keywords (used for guide search), and escalate (bool, default true).",
+
+  "deposit": {
+    "title": "Deposit / Payment Not Reflected",
+    "keywords": ["deposit", "payment", "order", "utr", "paid", "screenshot", "not reflected", "missing", "pending"],
+    "resolution": "DEPOSIT PROBLEM\n\nCHECK THESE KEY POINTS\n- Verify the recipient, amount, wallet, and order expiry.\n- Use the wallet linked to your iPay account; do not use Pocket UPI.\n\nWHAT TO DO NEXT\n- If you paid, submit the matching UTR and payment screenshot in iPay.\n- If the status is uncertain or the order expired, request a status check before paying again.\n- Contact support if it remains unresolved.",
+    "escalate": true
+  },
+
+  "withdrawal": {
+    "title": "Delayed Withdrawal",
+    "keywords": ["withdrawal", "withdraw", "payout", "receiving", "upi", "pending", "delayed", "not received"],
+    "resolution": "DELAYED WITHDRAWAL\n\nCHECK THESE KEY POINTS\n- Check that your receiving limit has not been reached.\n- Confirm UPI is enabled and your account can receive funds.\n- Make sure your wallet is connected in the iPay app.\n\nWHAT TO DO NEXT\n- Keep your order records and ask support to check the pending withdrawal.\n\nIMPORTANT\n- Do not submit a duplicate withdrawal.\n- Processing times can vary; contact support for an update.",
+    "escalate": true
+  },
+
+  "rewards": {
+    "title": "Missing Reward",
+    "keywords": ["rewards", "reward", "commission", "quota", "referral", "eligible", "missing", "welcome tasks"],
+    "resolution": "MISSING REWARD\n\nCHECK THESE KEY POINTS\n- Review the offer's eligibility and completion conditions in the app.\n- Check your progress and the reward status.\n- Ask support to clarify any task threshold or calculation.\n\nWHAT TO DO NEXT\n- A task threshold is not a separate unlocking fee; do not pay anyone to unlock a reward.\n- Ask support to check the missing reward.",
+    "escalate": true
+  },
+
+  "commission": {
+    "title": "Commission Discrepancy",
+    "keywords": ["commission", "rate", "eligible", "activity reward", "4%", "3%", "₹5"],
+    "resolution": "COMMISSION\n\nKEY POINTS\n- Rates and bonuses can vary by offer and completed order.\n- Check the current commission details in the app before starting.\n\nWHAT TO DO NEXT\n- Ask support to confirm the rate or eligibility for a specific order.",
+    "escalate": true
+  },
+
+  "upi": {
+    "title": "UPI Blocked / Locked",
+    "keywords": ["upi", "blocked", "locked", "upi handle", "invalid", "pocket upi", "frozen"],
+    "resolution": "UPI BLOCKED OR LOCKED\n\nCHECK THESE KEY POINTS\n- Check the wallet status and follow the instructions shown in the iPay app.\n- Contact your bank or wallet provider if they show a restriction.\n\nIMPORTANT\n- Avoid repeated attempts while the account is locked.\n- Only make a ₹1 transfer to your own UPI if the app instructs you to.\n- Contact support if the issue remains.",
+    "escalate": true
+  },
+
+  "locked": {
+    "title": "Order Locked",
+    "keywords": ["locked", "order locked", "account locked", "rebind", "unlock", "frozen"],
+    "resolution": "ORDER LOCKED\n\nWHAT TO DO NEXT\n- Check the wallet status and follow the instructions in the iPay app.\n- Do not log in through third-party apps or make duplicate payments.\n- Ask support what to do before changing or reconnecting the wallet.",
+    "escalate": true
+  },
+
+  "account": {
+    "title": "Account / Password Issue",
+    "keywords": ["account", "password", "otp", "security", "access", "reset", "forgot"],
+    "resolution": "ACCOUNT ACCESS\n\nCHECK THESE KEY POINTS\n- If signed in, use the password-change option in your account settings and follow the verification steps.\n- If you cannot sign in, contact support for account-recovery help.\n\nIMPORTANT\n- Never share your password, OTP, or PIN here.",
+    "escalate": true
+  }
+}

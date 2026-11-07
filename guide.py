@@ -1,6 +1,7 @@
 import logging
 import math
 import re
+from difflib import get_close_matches
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,8 +20,8 @@ STOP_WORDS = {
 }
 
 TOPIC_TERMS = {
-    "deposit": {"payment", "order", "transfer", "utr", "paid", "screenshot"},
-    "payment": {"deposit", "order", "transfer", "utr", "paid", "screenshot"},
+    "deposit": {"payment", "payments", "order", "transfer", "utr", "paid", "screenshot"},
+    "payment": {"deposit", "payments", "order", "transfer", "utr", "paid", "screenshot"},
     "withdrawal": {"withdraw", "payout", "receiving", "upi", "pending", "limit"},
     "withdraw": {"withdrawal", "payout", "receiving", "upi", "pending"},
     "reward": {"rewards", "commission", "quota", "referral", "eligible"},
@@ -30,6 +31,86 @@ TOPIC_TERMS = {
     "locked": {"lock", "blocked", "security", "wallet", "support"},
     "missing": {"pending", "status", "reward", "commission", "support"},
     "stuck": {"pending", "status", "withdrawal", "payment", "support"},
+    "payout": {"withdrawal", "withdraw", "receiving", "pending", "limit"},
+    "credited": {"deposit", "payment", "receiving", "status"},
+    "received": {"receiving", "withdrawal", "payment", "status"},
+    "wallets": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "upi": {"wallet", "locked", "blocked", "withdrawal"},
+    "delayed": {"pending", "withdrawal", "payment", "status"},
+    "payments": {"payment", "deposit", "order"},
+    "withdrawals": {"withdrawal", "payout", "receiving"},
+    "pending": {"status", "withdrawal", "payment", "order"},
+    "settlement": {"withdrawal", "payment", "status"},
+    "settled": {"withdrawal", "payment", "status"},
+    "cashout": {"withdrawal", "payout", "receiving"},
+    "cash": {"withdrawal", "payout", "receiving"},
+    "refund": {"payment", "deposit", "status", "support"},
+    "deducted": {"payment", "deposit", "status", "support"},
+    "transfer": {"payment", "deposit", "order", "utr"},
+    "business": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "limit": {"receiving", "withdrawal", "upi", "wallet"},
+}
+
+# Lightweight multilingual query expansion keeps PDF retrieval useful without
+# sending user messages to a separate translation service. The answer model
+# still receives the original wording and replies in the user's language.
+MULTILINGUAL_TERMS = {
+    # Hindi and common Hinglish
+    "निकासी": {"withdrawal", "withdraw"}, "निकालना": {"withdrawal", "withdraw"},
+    "निकालें": {"withdrawal", "withdraw"}, "पैसे": {"payment", "withdrawal"},
+    "जमा": {"deposit", "payment"}, "भुगतान": {"payment", "deposit"},
+    "अटका": {"pending", "stuck", "withdrawal", "payment"},
+    "अटकी": {"pending", "stuck", "withdrawal", "payment"},
+    "वॉलेट": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "वॉलेट्स": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "कमीशन": {"commission", "rate"}, "इनाम": {"reward", "rewards"},
+    "रेफरल": {"referral", "reward"}, "पासवर्ड": {"password", "account"},
+    "लॉक": {"locked", "blocked", "upi", "wallet"},
+    # Telugu
+    "ఉపసంహరణ": {"withdrawal", "withdraw"}, "డబ్బు": {"payment", "withdrawal"},
+    "చెల్లింపు": {"payment", "deposit"}, "జమ": {"deposit", "payment"},
+    "ఆగిపోయింది": {"pending", "stuck", "withdrawal", "payment"},
+    "వాలెట్": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "కమీషన్": {"commission", "rate"}, "రివార్డ్": {"reward", "rewards"},
+    # Tamil
+    "திரும்பப்": {"withdrawal", "withdraw"}, "பணம்": {"payment", "withdrawal"},
+    "வைப்பு": {"deposit", "payment"}, "கட்டணம்": {"payment", "deposit"},
+    "நிலுவை": {"pending", "stuck", "withdrawal", "payment"},
+    "வாலட்": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "கமிஷன்": {"commission", "rate"}, "வெகுமதி": {"reward", "rewards"},
+    # Kannada
+    "ಹಿಂಪಡೆಯುವಿಕೆ": {"withdrawal", "withdraw"}, "ಹಣ": {"payment", "withdrawal"},
+    "ಠೇವಣಿ": {"deposit", "payment"}, "ಪಾವತಿ": {"payment", "deposit"},
+    "ಬಾಕಿ": {"pending", "stuck", "withdrawal", "payment"},
+    "ವಾಲೆಟ್": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "ಕಮಿಷನ್": {"commission", "rate"}, "ಬಹುಮಾನ": {"reward", "rewards"},
+    # Malayalam
+    "പിൻവലിക്കൽ": {"withdrawal", "withdraw"}, "പണം": {"payment", "withdrawal"},
+    "നിക്ഷേപം": {"deposit", "payment"}, "പേയ്മെന്റ്": {"payment", "deposit"},
+    "കുടുങ്ങി": {"pending", "stuck", "withdrawal", "payment"},
+    "വാലറ്റ്": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "കമ്മീഷൻ": {"commission", "rate"}, "റിവാർഡ്": {"reward", "rewards"},
+    # Bengali, Marathi, Gujarati
+    "উত্তোলন": {"withdrawal", "withdraw"}, "টাকা": {"payment", "withdrawal"},
+    "জমা": {"deposit", "payment"}, "পেমেন্ট": {"payment", "deposit"},
+    "আটকে": {"pending", "stuck", "withdrawal", "payment"},
+    "ওয়ালেট": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "কমিশন": {"commission", "rate"}, "পুরস্কার": {"reward", "rewards"},
+    "पैसे": {"payment", "withdrawal"}, "काढणे": {"withdrawal", "withdraw"},
+    "ठेव": {"deposit", "payment"}, "अडकले": {"pending", "stuck", "withdrawal", "payment"},
+    "बक्षीस": {"reward", "rewards"}, "વૉલેટ": {"wallet", "phonepe", "paytm", "mobikwik", "freecharge"},
+    "પૈસા": {"payment", "withdrawal"}, "ઉપાડ": {"withdrawal", "withdraw"},
+    "ઉપાડવા": {"withdrawal", "withdraw"}, "ચુકવણી": {"payment", "deposit"},
+    "જમા": {"deposit", "payment"}, "અટક્યું": {"pending", "stuck", "withdrawal", "payment"},
+    "કમિશન": {"commission", "rate"}, "ઇનામ": {"reward", "rewards"},
+    # Common Latin transliteration
+    "kaise": {"how", "withdrawal", "payment"}, "nikale": {"withdrawal", "withdraw"},
+    "nikalna": {"withdrawal", "withdraw"}, "paisa": {"payment", "withdrawal"},
+    "atka": {"pending", "stuck", "withdrawal", "payment"},
+    "ela": {"how", "withdrawal", "payment"}, "cheyali": {"how", "withdrawal", "payment"},
+    "dabbu": {"payment", "withdrawal"}, "aagipoyindi": {"pending", "stuck"},
+    "eppudu": {"when", "pending", "withdrawal"}, "withdraw": {"withdrawal", "payout"},
+    "nikas": {"withdrawal", "withdraw"}, "payout": {"withdrawal", "receiving"},
 }
 
 
@@ -42,7 +123,12 @@ class GuidePage:
 
 def _tokens(text: str) -> List[str]:
     return [
-        word for word in re.findall(r"[a-z0-9]+", text.lower())
+        word for word in re.findall(
+            r"[a-z0-9]+|[\u0900-\u097f]+|[\u0980-\u09ff]+|"
+            r"[\u0a80-\u0aff]+|[\u0b80-\u0bff]+|"
+            r"[\u0c00-\u0c7f]+|[\u0c80-\u0cff]+|[\u0d00-\u0d7f]+",
+            text.lower(),
+        )
         if len(word) > 1 and word not in STOP_WORDS
     ]
 
@@ -73,6 +159,7 @@ class Guide:
         self._document_frequency = Counter(
             word for page_tokens in self._page_tokens for word in page_tokens
         )
+        self._vocabulary = set(self._document_frequency)
 
     def _load_pdf(self, pdf_path: Path, image_dir: Path) -> None:
         try:
@@ -119,6 +206,13 @@ class Guide:
         expanded_terms = set(terms)
         for term in terms:
             expanded_terms.update(TOPIC_TERMS.get(term, set()))
+            expanded_terms.update(MULTILINGUAL_TERMS.get(term, set()))
+        # Correct simple spelling mistakes against the guide vocabulary.
+        for term in terms:
+            if len(term) >= 5 and term not in self._vocabulary:
+                expanded_terms.update(
+                    get_close_matches(term, self._vocabulary, n=2, cutoff=0.78)
+                )
         if not expanded_terms:
             return []
 

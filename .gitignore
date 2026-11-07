@@ -6,3 +6,5 @@ venv/
 *.pyc
 guide_pages/
 .pytest_cache/
+*.log
+.test-tmp/
