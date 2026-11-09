@@ -60,6 +60,8 @@ SUPPORT_2 = os.getenv("SUPPORT_2", "@Roas668").strip()
 SUPPORT_3 = os.getenv("SUPPORT_3", "@Ipay811").strip()
 START_URL = os.getenv("START_URL", "").strip()
 GROUP_SUPPORT_URL = "https://t.me/ipayvip_1"
+OFFICIAL_CHANNEL_URL = "https://t.me/Ipay_Official_Channel"
+OFFICIAL_GROUP_URL = "https://t.me/+wtcrw4UYSDViMjA1"
 ICON_MESSAGE = "\U0001f4e9"
 ICON_LOCATION = "\U0001f4cd"
 ICON_CHECK = "\u2705"
@@ -302,8 +304,14 @@ def support_keyboard() -> InlineKeyboardMarkup:
                 _support_link(SUPPORT_1, "Contact " + SUPPORT_1),
                 _support_link(SUPPORT_2, f"{ICON_MESSAGE} Contact {SUPPORT_2}"),
             ],
-            [_support_link(SUPPORT_3, f"{ICON_MESSAGE} Contact {SUPPORT_3}")],
-            [InlineKeyboardButton("👥 Group Support", url=GROUP_SUPPORT_URL)],
+            [
+                _support_link(SUPPORT_3, f"{ICON_MESSAGE} Contact {SUPPORT_3}"),
+                InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL_URL),
+            ],
+            [
+                InlineKeyboardButton("👥 Group Support", url=GROUP_SUPPORT_URL),
+                InlineKeyboardButton("👥 Official Group", url=OFFICIAL_GROUP_URL),
+            ],
             [_back_button()],
         ]
     )
@@ -313,12 +321,16 @@ def support_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
+                InlineKeyboardButton("📢 Channel Support", url=OFFICIAL_CHANNEL_URL),
                 InlineKeyboardButton(
                     "👤 Customer Support",
                     callback_data="menu:customer_support",
                 )
             ],
-            [InlineKeyboardButton("👥 Group Support", url=GROUP_SUPPORT_URL)],
+            [
+                InlineKeyboardButton("👥 Group Support", url=GROUP_SUPPORT_URL),
+                InlineKeyboardButton("👥 Official Group", url=OFFICIAL_GROUP_URL),
+            ],
             [_back_button()],
         ]
     )
@@ -781,7 +793,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "Choose a button or ask a question in your language. I can explain wallets, "
             "deposit and withdrawal steps, rewards, referrals, and account-safety "
             "guidance from the supplied guide. I cannot check live accounts or "
-            "payments. Use /boost <6-digit UID> for withdrawal guidance; it does not "
+            "payments. Use /boost and mention your six-digit UID for withdrawal guidance; it does not "
             "apply a payout boost. Never send passwords, OTPs, or PINs.",
             reply_markup=main_keyboard(),
         )
@@ -922,8 +934,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     uid = args[0].strip("#:, -") if len(args) == 1 else ""
     if not re.fullmatch(r"\d{6}", uid):
         await message.reply_text(
-            f"{ICON_PIN} Invalid UID. Enter your 6-digit iPay UID.\n\n"
-            "Example: /boost 749488"
+            f"{ICON_PIN} Invalid UID. Please mention your six-digit iPay UID after /boost."
         )
         return
 
@@ -938,15 +949,82 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     safe_user_tag = escape(user_tag)
     safe_uid = escape(uid)
-    safe_support_1 = escape(SUPPORT_1)
-    safe_support_2 = escape(SUPPORT_2)
-    safe_support_3 = escape(SUPPORT_3)
 
+    reply_styles = (
+        (
+            "\U0001F4E9 <b>WITHDRAWAL SUPPORT DETAILS</b>",
+            "\U0001F504 Check that your wallet is linked correctly in the iPAY app.",
+            "\U0001F4BC Confirm in the app that your wallet is eligible for collections.",
+            "\U0001F6AB Avoid submitting another request while one is already pending.",
+            "\u25C6 iPAY \u2013 MOVE WITH PURPOSE!",
+        ),
+        (
+            "\U0001F4EC <b>WITHDRAWAL HELP</b>",
+            "",
+            "",
+            "",
+            "\u25C6 iPAY \u2013 SMART MOVES, STEADY PROGRESS!",
+        ),
+        (
+            "\U0001F4B3 <b>iPAY WITHDRAWAL GUIDE</b>",
+            "\U0001F4F2 Make sure your app and payment details are up to date.",
+            "",
+            "\U0001F512 Never share your password, OTP, or PIN with anyone.",
+            "\u25C6 iPAY \u2013 KEEP YOUR ACCOUNT SECURE!",
+        ),
+        (
+            "\U0001F4E8 <b>WITHDRAWAL CHECKLIST</b>",
+            "\U0001F504 Recheck that the correct wallet is connected to your account.",
+            "\U0001F4BC Review the wallet requirements shown in the iPAY app.",
+            "\U0001F4B3 Check your wallet's receiving limits before requesting a payout.",
+            "\u25C6 iPAY \u2013 CHECK, CONFIRM, THEN CONTINUE!",
+        ),
+        (
+            "\U0001F31F <b>NEED WITHDRAWAL ASSISTANCE?</b>",
+            "",
+            "",
+            "",
+            "\u25C6 iPAY \u2013 YOUR NEXT STEP STARTS HERE!",
+        ),
+        (
+            "\U0001F6E1\uFE0F <b>WITHDRAWAL SUPPORT</b>",
+            "\u2705 Check your wallet connection and payment details in the app.",
+            "",
+            "",
+            "\u25C6 iPAY \u2013 CLEAR STEPS, CONFIDENT MOVES!",
+        ),
+        (
+            "\U0001F4AB <b>iPAY ACCOUNT REMINDER</b>",
+            "\U0001F4B3 Verify that your selected wallet meets the app's collection requirements.",
+            "",
+            "\U0001F6AB Avoid repeated payout attempts until you have checked the current status.",
+            "\u25C6 iPAY \u2013 KEEP MOVING FORWARD!",
+        ),
+    )
+    user_data = getattr(context, "user_data", None)
+    if user_data is None:
+        style_index = 0
+    else:
+        style_index = (user_data.get("boost_reply_style_index", -1) + 1) % len(reply_styles)
+        user_data["boost_reply_style_index"] = style_index
+    heading, status, guidance, extra_tip, caption = reply_styles[style_index]
+    reply_body = "\n".join(
+        line.format(uid=safe_uid)
+        for line in (status, guidance, extra_tip)
+        if line
+    )
     notice_text = (
-        f"{CE_BOOST} 🚀 <b>WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!</b> {CE_FIRE}\n\n"
-        f"{CE_CHECK} 📍 <b>User:</b> {safe_user_tag}\n"
-        f"{CE_MONEY} 📍 <b>UID:</b> {safe_uid}\n\n"
-        f"{CE_SHIELD} 🔰 <b>Withdrawal Status:</b> Priority Support Activated ✅ {CE_CHECK}\n\n"
+        f"{heading}\n\n"
+        f"\U0001F464 <b>User:</b> {safe_user_tag}\n"
+        f"\U0001F194 <b>UID:</b> {safe_uid}\n\n"
+    )
+    if reply_body:
+        notice_text += f"{reply_body}\n\n"
+    notice_text += (
+        "This bot cannot activate a withdrawal boost or verify its status.\n"
+        "Contact support: "
+        f"{escape(SUPPORT_1)} or {escape(SUPPORT_2)}.\n\n"
+        f"{caption}"
     )
     await message.reply_text(
         notice_text,
@@ -2360,7 +2438,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Show the iPay welcome menu"),
-        BotCommand("boost", "Get withdrawal support guidance with your 6-digit UID"),
+        BotCommand("boost", "Mention your six-digit UID for withdrawal guidance"),
     ]
     try:
         await application.bot.set_my_commands(commands)

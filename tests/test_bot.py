@@ -137,12 +137,16 @@ class BotTests(unittest.TestCase):
         )
         self.assertTrue(customer_button.text.endswith("Customer Support"))
         self.assertEqual(group_button.url, "https://t.me/ipayvip_1")
+        channel_button = next(button for button in buttons if button.text == "📢 Channel Support")
+        official_group_button = next(button for button in buttons if button.text == "👥 Official Group")
+        self.assertEqual(channel_button.url, "https://t.me/Ipay_Official_Channel")
+        self.assertEqual(official_group_button.url, "https://t.me/+wtcrw4UYSDViMjA1")
 
     def test_customer_support_contacts_also_offer_group_support(self):
         keyboard = bot.support_keyboard()
         customer_buttons = keyboard.inline_keyboard[0]
-        third_customer_button = keyboard.inline_keyboard[1][0]
-        group_button = keyboard.inline_keyboard[2][0]
+        third_customer_button, channel_button = keyboard.inline_keyboard[1]
+        group_button, official_group_button = keyboard.inline_keyboard[2]
         self.assertEqual(
             [button.text for button in customer_buttons],
             [f"Contact {bot.SUPPORT_1}", f"{bot.ICON_MESSAGE} Contact {bot.SUPPORT_2}"],
@@ -152,8 +156,12 @@ class BotTests(unittest.TestCase):
             f"{bot.ICON_MESSAGE} Contact {bot.SUPPORT_3}",
         )
         self.assertEqual(third_customer_button.url, "https://t.me/Ipay811")
+        self.assertEqual(channel_button.text, "📢 Official Channel")
+        self.assertEqual(channel_button.url, "https://t.me/Ipay_Official_Channel")
         self.assertEqual(group_button.text, "👥 Group Support")
         self.assertEqual(group_button.url, "https://t.me/ipayvip_1")
+        self.assertEqual(official_group_button.text, "👥 Official Group")
+        self.assertEqual(official_group_button.url, "https://t.me/+wtcrw4UYSDViMjA1")
 
     def test_wallet_menu_has_only_payin_payout_and_back_buttons(self):
         buttons = [
@@ -933,7 +941,9 @@ class BotTests(unittest.TestCase):
                 "https://t.me/Ipay800",
                 "https://t.me/Roas668",
                 "https://t.me/Ipay811",
+                "https://t.me/Ipay_Official_Channel",
                 bot.GROUP_SUPPORT_URL,
+                bot.OFFICIAL_GROUP_URL,
             ],
         )
 
@@ -2008,9 +2018,12 @@ class BotTests(unittest.TestCase):
             asyncio.run(bot.boost_command(update, context))
         save_user_uid.assert_called_once_with(333, "test_user", "Test", "749488")
         response = message.reply_text.await_args.args[0]
-        self.assertIn("WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!", response)
+        self.assertIn("📩 <b>WITHDRAWAL SUPPORT DETAILS</b>", response)
+        self.assertIn("👤 <b>User:</b> @test_user", response)
         self.assertIn("UID:</b> 749488", response)
-        self.assertIn("Priority Support Activated", response)
+        self.assertIn("cannot activate a withdrawal boost", response)
+        self.assertNotIn("Priority Support Activated", response)
+        self.assertTrue(response.endswith("◆ iPAY – MOVE WITH PURPOSE!"))
         self.assertNotIn("reply_markup", message.reply_text.await_args.kwargs)
 
     def test_uid_and_notice_commands_tag_user_and_show_notice(self):
@@ -2050,7 +2063,7 @@ class BotTests(unittest.TestCase):
             self.assertIn("894235", notice_text)
             self.assertIn("USER SUPPORT NOTICE", notice_text)
 
-    def test_boost_command_includes_custom_emojis(self):
+    def test_boost_command_does_not_claim_to_activate_priority_support(self):
         message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         update = SimpleNamespace(effective_message=message, effective_user=user)
@@ -2058,8 +2071,24 @@ class BotTests(unittest.TestCase):
         with patch.object(bot, "save_user_uid"):
             asyncio.run(bot.boost_command(update, context))
         response = message.reply_text.await_args.args[0]
-        self.assertIn("6118531988073747281", response)  # CE_BOOST
-        self.assertIn("6115942363312428399", response)  # CE_CHECK
+        self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
+        self.assertIn("Contact support:", response)
+        self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
+        self.assertNotIn("Priority Support Activated", response)
+
+    def test_all_boost_reply_styles_explain_limits_and_offer_support(self):
+        context = SimpleNamespace(args=["749488"], user_data={})
+        user = SimpleNamespace(id=333, username="test_user", first_name="Test")
+        for _ in range(7):
+            message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
+            update = SimpleNamespace(effective_message=message, effective_user=user)
+            with patch.object(bot, "save_user_uid"):
+                asyncio.run(bot.boost_command(update, context))
+            response = message.reply_text.await_args.args[0]
+            self.assertIn("cannot activate a withdrawal boost", response)
+            self.assertIn(f"{bot.SUPPORT_1} or {bot.SUPPORT_2}", response)
+            self.assertNotIn("Priority Support Activated", response)
+            self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
 
     def test_ai_reply_triggers_boost_on_typos(self):
         message = SimpleNamespace(text="bost 789983", reply_text=AsyncMock(), message_id=123)
@@ -2073,7 +2102,8 @@ class BotTests(unittest.TestCase):
         message.reply_text.assert_awaited_once()
         response = message.reply_text.await_args.args[0]
         self.assertIn("789983", response)
-        self.assertIn("WITHDRAWAL — BOOST ACTIVATED SUCCESSFULLY!", response)
+        self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
+        self.assertIn("cannot activate a withdrawal boost", response)
 
 
 if __name__ == "__main__":
