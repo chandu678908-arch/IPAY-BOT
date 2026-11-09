@@ -4,14 +4,14 @@
   "deposit": {
     "title": "Deposit / Payment Not Reflected",
     "keywords": ["deposit", "payment", "order", "utr", "paid", "screenshot", "not reflected", "missing", "pending"],
-    "resolution": "DEPOSIT PROBLEM\n\nCHECK THESE KEY POINTS\n- Verify the recipient, amount, wallet, and order expiry.\n- Use the wallet linked to your iPay account; do not use Pocket UPI.\n\nWHAT TO DO NEXT\n- If you paid, submit the matching UTR and payment screenshot in iPay.\n- If the status is uncertain or the order expired, request a status check before paying again.\n- Contact support if it remains unresolved.",
+    "resolution": "◆ iPAY – DEPOSIT ISSUE\n\n➡️ IMPORTANT CHECKS\n▪️ Check the payment details and order expiry.\n▪️ Use your iPay-linked wallet only.\n▪️ Do not use Pocket UPI.\n\n🎯 NEXT STEPS\n✅ Paid? Submit your UTR and payment screenshot.\n⏳ Payment pending? Check the status before paying again.\n📞 Still facing issues? Contact iPay support.\n\n◆ CHECK FIRST – PAY SAFELY!",
     "escalate": true
   },
 
   "withdrawal": {
     "title": "Delayed Withdrawal",
     "keywords": ["withdrawal", "withdraw", "payout", "receiving", "upi", "pending", "delayed", "not received"],
-    "resolution": "DELAYED WITHDRAWAL\n\nCHECK THESE KEY POINTS\n- Check that your receiving limit has not been reached.\n- Confirm UPI is enabled and your account can receive funds.\n- Make sure your wallet is connected in the iPay app.\n\nWHAT TO DO NEXT\n- Keep your order records and ask support to check the pending withdrawal.\n\nIMPORTANT\n- Do not submit a duplicate withdrawal.\n- Processing times can vary; contact support for an update.",
+    "resolution": "🧾 iPAY – DELAYED WITHDRAWAL\n\n➡️ IMPORTANT CHECKS\n▪️ Check your daily UPI receiving limit.\n▪️ Make sure UPI is active.\n▪️ Ensure your bank account can receive payments.\n▪️ Check your wallet connection.\n▪️ Try relinking your wallet if needed.\n\n🎯 WHAT TO DO\n▪️ ⏳ Wait for the status update.\n▪️ 📞 Contact iPay support if the delay continues.\n\n◆ CHECK • VERIFY • STAY UPDATED!",
     "escalate": true
   },
 

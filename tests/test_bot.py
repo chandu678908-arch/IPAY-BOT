@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -208,12 +209,16 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("issue:other", callbacks)
         issue_rows = bot.issues_keyboard().inline_keyboard
         self.assertEqual(
+            [button.text for button in issue_rows[0]],
+            [f"{bot.ICON_CHECK} Deposit", f"{bot.ICON_WITHDRAWAL} Withdrawal"],
+        )
+        self.assertEqual(
             [button.callback_data for button in issue_rows[1]],
             ["issue:guide", "issue:commission"],
         )
         self.assertEqual(
             [button.text for button in issue_rows[1]],
-            [f"{bot.ICON_BOOKMARK} User Guide", f"{bot.ICON_PIN} Commission"],
+            [f"{bot.ICON_GUIDE} Guide", f"{bot.ICON_COMMISSION} Commission"],
         )
 
     def test_issue_guide_button_sends_pdf_as_downloadable_document(self):
@@ -260,7 +265,7 @@ class BotTests(unittest.TestCase):
             )
         message.reply_photo.assert_awaited_once()
         self.assertIn(
-            "Choose the issue",
+            "Identify your issue and click the button below",
             message.reply_photo.await_args.kwargs["caption"],
         )
         buttons = message.reply_photo.await_args.kwargs["reply_markup"].inline_keyboard
@@ -364,6 +369,7 @@ class BotTests(unittest.TestCase):
                     or query.edit_message_media.await_count
                     or message.reply_photo.await_count
                     or message.reply_document.await_count
+                    or message.reply_text.await_count
                 )
 
     def test_every_command_handler_returns_a_response(self):
@@ -446,13 +452,29 @@ class BotTests(unittest.TestCase):
         message.reply_text.assert_not_awaited()
         text = message.reply_photo.await_args.kwargs["caption"]
         self.assertIn("WELCOME TO iPAY", text)
-        self.assertIn("Your guide to wallets, payments, and support:", text)
-        self.assertIn("Up to 4% commission on eligible completed orders", text)
-        self.assertIn("Rewards on selected activity orders", text)
-        self.assertIn("Quick access to withdrawal support", text)
-        self.assertIn("scalable platform for earning opportunities", text)
+        ET.fromstring(f"<root>{text}</root>")
+        self.assertNotIn("![", text)
+        self.assertNotIn("<tg-emoji", text)
+        self.assertTrue(text.startswith("⚡ <b>WELCOME TO iPAY</b> 🔥\n\n"))
         self.assertIn(
-            f"{bot.ICON_BOOKMARK} Up to 4% commission on eligible completed orders\n\n",
+            "📈 Up to 4% commission on eligible completed orders\n\n",
+            text,
+        )
+        self.assertNotIn("Your guide to wallets, payments, and support:", text)
+        self.assertIn(
+            "💸 Rewards on selected activity orders\n\n",
+            text,
+        )
+        self.assertIn(
+            "🖥️ Quick access to withdrawal support guidance\n\n",
+            text,
+        )
+        self.assertIn(
+            "🪧 A scalable platform for earning opportunities",
+            text,
+        )
+        self.assertIn(
+            "🕹️ Choose iPAY, choose a smarter path forward.",
             text,
         )
         self.assertNotIn("Hello @", text)
@@ -487,6 +509,7 @@ class BotTests(unittest.TestCase):
             data="nav:menu",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
         )
         update = SimpleNamespace(callback_query=query)
@@ -495,11 +518,12 @@ class BotTests(unittest.TestCase):
         )
         with patch.object(bot, "WELCOME_IMAGE_PATH", image_path):
             asyncio.run(bot.handle_callback(update, context))
-        query.edit_message_media.assert_awaited_once()
-        message.reply_photo.assert_not_awaited()
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "welcome_home_compressed.jpg")
-        self.assertIn("WELCOME TO iPAY", media.caption)
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        sent_photo = message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "welcome_home_compressed.jpg")
+        self.assertIn("WELCOME TO iPAY", sent_photo["caption"])
 
     def test_main_menu_from_text_replaces_message_with_home_image(self):
         image_path = (
@@ -548,6 +572,7 @@ class BotTests(unittest.TestCase):
             data="menu:support",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_text=AsyncMock(),
         )
@@ -558,11 +583,13 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "support_home_compressed.jpg")
-        self.assertFalse(media.caption)
-        markup = query.edit_message_media.await_args.kwargs["reply_markup"]
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        sent_photo = message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "support_home_compressed.jpg")
+        self.assertNotIn("caption", sent_photo)
+        markup = sent_photo["reply_markup"]
         self.assertIn(
             "menu:customer_support",
             {
@@ -588,6 +615,7 @@ class BotTests(unittest.TestCase):
             data="menu:security",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_text=AsyncMock(),
             edit_message_reply_markup=AsyncMock(),
@@ -599,12 +627,13 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "security.jpg")
-        self.assertFalse(media.caption)
-        self.assertEqual(media.to_dict()["caption"], "")
-        markup = query.edit_message_media.await_args.kwargs["reply_markup"]
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        sent_photo = message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "security.jpg")
+        self.assertNotIn("caption", sent_photo)
+        markup = sent_photo["reply_markup"]
         self.assertIn(
             "menu:customer_support",
             {
@@ -667,17 +696,21 @@ class BotTests(unittest.TestCase):
                 query.delete_message.assert_awaited_once()
                 message.reply_text.assert_not_awaited()
 
-    def test_callback_image_reuses_telegram_file_id_after_first_upload(self):
+    def test_callback_image_reuses_telegram_file_id_for_replacement_message(self):
         image_path = self.root / "menu.jpg"
         image_path.write_bytes(b"test image")
 
-        first_query = SimpleNamespace(
-            message=SimpleNamespace(photo=[object()]),
-            edit_message_media=AsyncMock(
+        first_message = SimpleNamespace(
+            photo=[],
+            reply_photo=AsyncMock(
                 return_value=SimpleNamespace(
                     photo=[SimpleNamespace(file_id="cached-photo-id")]
                 )
             ),
+        )
+        first_query = SimpleNamespace(
+            message=first_message,
+            delete_message=AsyncMock(),
         )
         first_update = SimpleNamespace(callback_query=first_query)
         asyncio.run(
@@ -688,16 +721,21 @@ class BotTests(unittest.TestCase):
                 bot.main_keyboard(),
             )
         )
-        first_media = first_query.edit_message_media.await_args.kwargs["media"]
-        self.assertIsInstance(first_media.media, bot.InputFile)
+        first_media = first_message.reply_photo.await_args.kwargs["photo"]
+        self.assertIsInstance(first_media, bot.InputFile)
+        first_query.delete_message.assert_awaited_once()
 
-        second_query = SimpleNamespace(
-            message=SimpleNamespace(photo=[object()]),
-            edit_message_media=AsyncMock(
+        second_message = SimpleNamespace(
+            photo=[],
+            reply_photo=AsyncMock(
                 return_value=SimpleNamespace(
                     photo=[SimpleNamespace(file_id="cached-photo-id")]
                 )
             ),
+        )
+        second_query = SimpleNamespace(
+            message=second_message,
+            delete_message=AsyncMock(),
         )
         second_update = SimpleNamespace(callback_query=second_query)
         asyncio.run(
@@ -708,8 +746,9 @@ class BotTests(unittest.TestCase):
                 bot.main_keyboard(),
             )
         )
-        second_media = second_query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(second_media.media, "cached-photo-id")
+        second_photo = second_message.reply_photo.await_args.kwargs["photo"]
+        self.assertEqual(second_photo, "cached-photo-id")
+        second_query.delete_message.assert_awaited_once()
 
     def test_expired_callback_answer_does_not_prevent_menu_image(self):
         image_path = (
@@ -804,6 +843,7 @@ class BotTests(unittest.TestCase):
             data="menu:issues",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -815,12 +855,16 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        self.assertEqual(message.reply_photo.await_count, 0)
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "issues_home_compressed.jpg")
-        self.assertIn("Choose the issue", media.caption)
-        markup = query.edit_message_media.await_args.kwargs["reply_markup"]
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        media_kwargs = message.reply_photo.await_args.kwargs
+        self.assertEqual(media_kwargs["photo"].filename, "issues_home_compressed.jpg")
+        self.assertIn(
+            "Identify your issue and click the button below",
+            media_kwargs["caption"],
+        )
+        markup = media_kwargs["reply_markup"]
         self.assertIn(
             "issue:withdrawal",
             {
@@ -838,6 +882,7 @@ class BotTests(unittest.TestCase):
                 reply_text=AsyncMock(),
             ),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
         )
@@ -845,9 +890,10 @@ class BotTests(unittest.TestCase):
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
         asyncio.run(bot.handle_callback(SimpleNamespace(callback_query=query), context))
-        query.edit_message_caption.assert_awaited_once()
+        query.message.reply_text.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
         self.assertEqual(
-            query.edit_message_caption.await_args.kwargs["caption"],
+            query.message.reply_text.await_args.args[0],
             "Choose a customer support contact:",
         )
         query.edit_message_media.assert_not_awaited()
@@ -860,6 +906,7 @@ class BotTests(unittest.TestCase):
                 reply_text=AsyncMock(),
             ),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_text=AsyncMock(),
         )
         context = SimpleNamespace(
@@ -867,12 +914,13 @@ class BotTests(unittest.TestCase):
         )
         asyncio.run(bot.handle_callback(SimpleNamespace(callback_query=query), context))
         query.answer.assert_awaited_once()
-        query.edit_message_text.assert_awaited_once()
+        query.message.reply_text.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
         self.assertEqual(
-            query.edit_message_text.await_args.args[0],
+            query.message.reply_text.await_args.args[0],
             "Choose a customer support contact:",
         )
-        keyboard = query.edit_message_text.await_args.kwargs["reply_markup"]
+        keyboard = query.message.reply_text.await_args.kwargs["reply_markup"]
         customer_buttons = [
             button
             for row in keyboard.inline_keyboard
@@ -1416,6 +1464,7 @@ class BotTests(unittest.TestCase):
                 reply_photo=AsyncMock(),
             ),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_text=AsyncMock(),
             edit_message_caption=AsyncMock(),
@@ -1425,16 +1474,16 @@ class BotTests(unittest.TestCase):
         )
         with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images):
             asyncio.run(bot.handle_callback(SimpleNamespace(callback_query=query), context))
-        query.edit_message_media.assert_awaited_once()
-        query.message.reply_photo.assert_not_awaited()
+        query.edit_message_media.assert_not_awaited()
+        query.message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
         query.message.reply_text.assert_not_awaited()
-        caption = query.edit_message_media.await_args.kwargs["media"].caption
-        self.assertIn("DELAYED WITHDRAWAL", caption)
-        self.assertIn("CHECK THESE KEY POINTS", caption)
-        self.assertNotIn("WHAT TO DO NEXT", caption)
-        self.assertNotIn("Keep your order records", caption)
-        self.assertNotIn("Do not submit a duplicate withdrawal", caption)
-        self.assertNotIn("Processing times can vary", caption)
+        caption = query.message.reply_photo.await_args.kwargs["caption"]
+        self.assertEqual(caption, bot._issue_answer("withdrawal")[0])
+        self.assertIn("Check your daily UPI receiving limit.", caption)
+        self.assertIn("Try relinking your wallet if needed.", caption)
+        self.assertIn("Wait for the status update.", caption)
+        self.assertIn("Contact iPay support if the delay continues.", caption)
         self.assertNotIn("guide", caption.lower())
         self.assertNotIn("Owner-provided", caption)
 
@@ -1451,6 +1500,7 @@ class BotTests(unittest.TestCase):
             data="issue:withdrawal",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -1462,12 +1512,15 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        self.assertEqual(message.reply_photo.await_count, 0)
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "withdrawal_delay.jpg")
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        self.assertEqual(
+            message.reply_photo.await_args.kwargs["photo"].filename,
+            "withdrawal_delay.jpg",
+        )
 
-    def test_issue_image_edit_failure_sends_requested_image_and_removes_home(self):
+    def test_issue_image_replaces_current_message_without_editing(self):
         custom_images = self.root / "custom_images"
         custom_images.mkdir()
         (custom_images / "deposit_problem.jpg").write_bytes(b"test image")
@@ -1481,9 +1534,7 @@ class BotTests(unittest.TestCase):
             message=message,
             answer=AsyncMock(),
             delete_message=AsyncMock(),
-            edit_message_media=AsyncMock(
-                side_effect=BadRequest("message can't be edited")
-            ),
+            edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
             edit_message_reply_markup=AsyncMock(),
@@ -1496,32 +1547,36 @@ class BotTests(unittest.TestCase):
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
 
-        query.edit_message_media.assert_awaited_once()
+        query.edit_message_media.assert_not_awaited()
         message.reply_photo.assert_awaited_once()
         message.reply_text.assert_not_awaited()
-        query.delete_message.assert_awaited_once()
         query.edit_message_caption.assert_not_awaited()
+        query.delete_message.assert_awaited_once()
         self.assertEqual(
             message.reply_photo.await_args.kwargs["photo"].filename,
             "deposit_problem.jpg",
         )
         self.assertIn(
-            "DEPOSIT PROBLEM",
+            "◆ iPAY – DEPOSIT ISSUE",
             message.reply_photo.await_args.kwargs["caption"],
         )
 
-    def test_cached_image_edit_retries_with_local_file_before_replacement(self):
+    def test_stale_cached_image_id_retries_upload_with_local_file(self):
         image_path = self.root / "deposit_problem.jpg"
         image_path.write_bytes(b"test image")
         bot.PHOTO_FILE_IDS[bot._image_cache_key(image_path)] = "stale-file-id"
-        query = SimpleNamespace(
-            message=SimpleNamespace(photo=[object()]),
-            edit_message_media=AsyncMock(
+        message = SimpleNamespace(
+            photo=[object()],
+            reply_photo=AsyncMock(
                 side_effect=[
-                    BadRequest("Can't parse inputmedia: media not found"),
+                    BadRequest("Photo file not found"),
                     SimpleNamespace(photo=[SimpleNamespace(file_id="fresh-file-id")]),
                 ]
             ),
+        )
+        query = SimpleNamespace(
+            message=message,
+            delete_message=AsyncMock(),
         )
         result = asyncio.run(
             bot._replace_callback_image(
@@ -1532,9 +1587,10 @@ class BotTests(unittest.TestCase):
             )
         )
         self.assertTrue(result)
-        self.assertEqual(query.edit_message_media.await_count, 2)
-        retried_media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertIsInstance(retried_media.media, bot.InputFile)
+        self.assertEqual(message.reply_photo.await_count, 2)
+        retried_photo = message.reply_photo.await_args.kwargs["photo"]
+        self.assertIsInstance(retried_photo, bot.InputFile)
+        query.delete_message.assert_awaited_once()
         self.assertEqual(
             bot.PHOTO_FILE_IDS[bot._image_cache_key(image_path)],
             "fresh-file-id",
@@ -1554,6 +1610,7 @@ class BotTests(unittest.TestCase):
             message=message,
             from_user=SimpleNamespace(id=54),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -1581,9 +1638,14 @@ class BotTests(unittest.TestCase):
             query.data = "nav:back"
             asyncio.run(bot.handle_callback(update, context))
 
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "issues_home_compressed.jpg")
-        self.assertIn("Choose the issue", media.caption)
+        query.edit_message_media.assert_not_awaited()
+        self.assertEqual(message.reply_photo.await_count, 3)
+        final_menu = message.reply_photo.await_args.kwargs
+        self.assertEqual(final_menu["photo"].filename, "issues_home_compressed.jpg")
+        self.assertIn(
+            "Identify your issue and click the button below",
+            final_menu["caption"],
+        )
         history_key = (message.chat.id, query.from_user.id)
         self.assertEqual(
             context.application.bot_data["menu_history"][history_key],
@@ -1603,6 +1665,7 @@ class BotTests(unittest.TestCase):
             data="issue:deposit",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -1614,14 +1677,18 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "deposit_problem.jpg")
-        self.assertNotIn("Owner-provided deposit illustration", media.caption)
-        self.assertNotIn("24-hour timing", media.caption)
-        self.assertTrue(media.caption.startswith("DEPOSIT PROBLEM\n\nCHECK THESE KEY POINTS"))
-        self.assertNotIn("Owner-provided", media.caption)
-        self.assertEqual(message.reply_photo.await_count, 0)
+        query.edit_message_media.assert_not_awaited()
+        query.delete_message.assert_awaited_once()
+        self.assertEqual(message.reply_photo.await_count, 1)
+        media = message.reply_photo.await_args.kwargs
+        self.assertEqual(media["photo"].filename, "deposit_problem.jpg")
+        self.assertNotIn("Owner-provided deposit illustration", media["caption"])
+        self.assertNotIn("24-hour timing", media["caption"])
+        self.assertEqual(media["caption"], bot._issue_answer("deposit")[0])
+        self.assertTrue(media["caption"].startswith("◆ iPAY – DEPOSIT ISSUE"))
+        self.assertIn("Use your iPay-linked wallet only.", media["caption"])
+        self.assertIn("Payment pending? Check the status before paying again.", media["caption"])
+        self.assertNotIn("Owner-provided", media["caption"])
         self.assertEqual(message.reply_text.await_count, 0)
 
     def test_upi_issue_uses_supplied_image(self):
@@ -1637,6 +1704,7 @@ class BotTests(unittest.TestCase):
             data="issue:upi",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -1648,15 +1716,65 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        message.reply_photo.assert_not_awaited()
+        query.edit_message_media.assert_not_awaited()
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
         self.assertEqual(
-            query.edit_message_media.await_args.kwargs["media"].media.filename,
+            message.reply_photo.await_args.kwargs["photo"].filename,
             "upi_locked.jpg",
         )
-        caption = query.edit_message_media.await_args.kwargs["media"].caption
-        self.assertTrue(caption.startswith("UPI BLOCKED OR LOCKED\n\n"))
+        caption = message.reply_photo.await_args.kwargs["caption"]
+        self.assertEqual(
+            caption,
+            "◆ iPAY – UPI BLOCKED / LOCKED\n\n"
+            "🔍 IMPORTANT CHECKS\n"
+            "📱 Follow the instructions shown in the above image.\n"
+            "🏦 Check for restrictions from your bank or wallet provider.\n\n"
+            "⚙️ WHAT TO DO NEXT\n"
+            "🚫 Avoid repeated payment attempts while UPI is locked.\n"
+            "💸 Make a ₹1 transfer to your own UPI only if instructed by the app.\n"
+            "🏦 Contact your bank or wallet provider if UPI is blocked.\n"
+            "📞 Contact iPay support if the issue continues.",
+        )
         self.assertNotIn("Owner-provided", caption)
+
+    def test_order_locked_issue_uses_requested_guidance(self):
+        custom_images = self.root / "custom_images"
+        custom_images.mkdir()
+        (custom_images / "order_locked.jpg").write_bytes(b"test image")
+        message = SimpleNamespace(
+            photo=[object()],
+            reply_text=AsyncMock(),
+            reply_photo=AsyncMock(),
+        )
+        query = SimpleNamespace(
+            data="issue:locked",
+            message=message,
+            answer=AsyncMock(),
+            delete_message=AsyncMock(),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={"guide": self.make_guide()})
+        )
+        with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images):
+            asyncio.run(
+                bot.handle_callback(SimpleNamespace(callback_query=query), context)
+            )
+        message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        caption = message.reply_photo.await_args.kwargs["caption"]
+        self.assertEqual(
+            caption,
+            "◆ iPAY – ORDER LOCKED\n\n"
+            "🔍 WHAT TO DO NEXT\n\n"
+            "📱 Check your wallet status and follow the iPay app instructions.\n"
+            "🔄 Relink your wallet and wait for the system to process.\n"
+            "🚫 Avoid third-party logins and duplicate payments.\n"
+            "⏳ The system updates every 10 minutes. Keep your wallet ready and wait "
+            "for processing.\n"
+            "📞 Contact iPay support if the issue continues.\n\n"
+            "◆ RELINK • WAIT • STAY UPDATED!",
+        )
 
     def test_commission_issue_uses_image_with_structured_guidance(self):
         custom_images = self.root / "custom_images"
@@ -1671,6 +1789,7 @@ class BotTests(unittest.TestCase):
             data="issue:commission",
             message=message,
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_text=AsyncMock(),
@@ -1682,16 +1801,17 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        media = query.edit_message_media.await_args.kwargs["media"]
-        self.assertEqual(media.media.filename, "commission.jpg")
-        self.assertTrue(media.caption.startswith("COMMISSION\n\nKEY POINTS"))
-        self.assertIn("Rates and bonuses can vary by offer and completed order.", media.caption)
-        self.assertNotIn("WHAT TO DO NEXT", media.caption)
-        self.assertNotIn("Ask support to confirm the rate", media.caption)
-        self.assertNotIn("guide", media.caption.lower())
-        self.assertNotIn("Owner-provided", media.caption)
-        self.assertEqual(message.reply_photo.await_count, 0)
+        query.edit_message_media.assert_not_awaited()
+        query.delete_message.assert_awaited_once()
+        media = message.reply_photo.await_args.kwargs
+        self.assertEqual(media["photo"].filename, "commission.jpg")
+        self.assertTrue(media["caption"].startswith("COMMISSION\n\nKEY POINTS"))
+        self.assertIn("Rates and bonuses can vary by offer and completed order.", media["caption"])
+        self.assertNotIn("WHAT TO DO NEXT", media["caption"])
+        self.assertNotIn("Ask support to confirm the rate", media["caption"])
+        self.assertNotIn("guide", media["caption"].lower())
+        self.assertNotIn("Owner-provided", media["caption"])
+        self.assertEqual(message.reply_photo.await_count, 1)
         self.assertEqual(message.reply_text.await_count, 0)
 
     def test_rewards_issue_sends_quota_illustration_with_structured_guidance(self):
@@ -1706,6 +1826,7 @@ class BotTests(unittest.TestCase):
                 reply_photo=AsyncMock(),
             ),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_text=AsyncMock(),
             edit_message_media=AsyncMock(),
             edit_message_caption=AsyncMock(),
@@ -1719,15 +1840,16 @@ class BotTests(unittest.TestCase):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
-        query.edit_message_media.assert_awaited_once()
-        query.message.reply_photo.assert_not_awaited()
-        caption = query.edit_message_media.await_args.kwargs["media"].caption
+        query.edit_message_media.assert_not_awaited()
+        query.delete_message.assert_awaited_once()
+        query.message.reply_photo.assert_awaited_once()
+        caption = query.message.reply_photo.await_args.kwargs["caption"]
         self.assertTrue(caption.startswith("MISSING REWARD\n\nCHECK THESE KEY POINTS"))
         self.assertIn("Ask support to clarify any task threshold or calculation.", caption)
         self.assertNotIn("guide", caption.lower())
         self.assertNotIn("Owner-provided", caption)
 
-    def test_wallet_menu_replaces_current_image_without_adding_message(self):
+    def test_wallet_menu_replaces_current_message_without_editing(self):
         query = SimpleNamespace(
             data="menu:wallets",
             message=SimpleNamespace(
@@ -1736,6 +1858,7 @@ class BotTests(unittest.TestCase):
                 reply_text=AsyncMock(),
             ),
             answer=AsyncMock(),
+            delete_message=AsyncMock(),
             edit_message_text=AsyncMock(),
             edit_message_caption=AsyncMock(),
             edit_message_media=AsyncMock(),
@@ -1755,23 +1878,31 @@ class BotTests(unittest.TestCase):
                     context,
                 )
             )
-        query.edit_message_media.assert_awaited_once()
-        query.message.reply_photo.assert_not_awaited()
+        query.edit_message_media.assert_not_awaited()
+        query.message.reply_photo.assert_awaited_once()
+        query.delete_message.assert_awaited_once()
+        sent_photo = query.message.reply_photo.await_args.kwargs
         self.assertEqual(
-            query.edit_message_media.await_args.kwargs["media"].media.filename,
+            sent_photo["photo"].filename,
             "wallets_payin.jpg",
         )
         self.assertEqual(
-            query.edit_message_media.await_args.kwargs["media"].caption,
+            sent_photo["caption"],
             (
-                f"{bot.ICON_LOCATION} SUPPORTED WALLETS\n\nPAYIN\n\n"
-                f"{bot.ICON_CHECK} PhonePe\n"
-                f"{bot.ICON_CHECK} Paytm\n"
-                f"{bot.ICON_CHECK} MobiKwik\n"
-                f"{bot.ICON_CHECK} Freecharge"
+                "◆ iPAY – SUPPORTED WALLETS\n\n"
+                "📈 PAYIN WALLETS\n"
+                "▪️ ✅ PhonePe\n"
+                "▪️ ✅ Paytm\n"
+                "▪️ ✅ MobiKwik\n"
+                "▪️ ✅ Freecharge\n\n"
+                "💼 BUSINESS WALLETS\n"
+                "▪️ Google Pay Business\n"
+                "▪️ PhonePe Business\n"
+                "▪️ Paytm Business\n\n"
+                "⚠️ Business wallets are recommended for smoother collections."
             ),
         )
-        markup = query.edit_message_media.await_args.kwargs["reply_markup"]
+        markup = sent_photo["reply_markup"]
         self.assertEqual(
             [button.callback_data for row in markup.inline_keyboard for button in row],
             [
@@ -1786,16 +1917,7 @@ class BotTests(unittest.TestCase):
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
         for action, expected_title, expected_wallets in (
-            (
-                "wallet:payin",
-                "PAYIN",
-                (
-                    "PhonePe",
-                    "Paytm",
-                    "MobiKwik",
-                    "Freecharge",
-                ),
-            ),
+            ("wallet:payin", "PAYIN", ("PhonePe", "Paytm", "MobiKwik", "Freecharge")),
             (
                 "wallet:payout",
                 "PAYOUT",
@@ -1816,6 +1938,7 @@ class BotTests(unittest.TestCase):
                     data=action,
                     message=message,
                     answer=AsyncMock(),
+                    delete_message=AsyncMock(),
                     edit_message_media=AsyncMock(),
                     edit_message_text=AsyncMock(),
                     edit_message_caption=AsyncMock(),
@@ -1827,19 +1950,38 @@ class BotTests(unittest.TestCase):
                         context,
                     )
                 )
-                query.edit_message_media.assert_awaited_once()
-                self.assertEqual(query.message.reply_photo.await_count, 0)
-                media = query.edit_message_media.await_args.kwargs["media"]
-                self.assertEqual(media.media.filename, "wallets_payin.jpg")
-                self.assertIn(expected_title, media.caption)
+                query.edit_message_media.assert_not_awaited()
+                query.message.reply_photo.assert_awaited_once()
+                query.delete_message.assert_awaited_once()
+                media = query.message.reply_photo.await_args.kwargs
+                self.assertEqual(media["photo"].filename, "wallets_payin.jpg")
+                self.assertIn(expected_title, media["caption"])
                 for wallet in expected_wallets:
-                    self.assertIn(wallet, media.caption)
-                self.assertNotIn("Google Pay", media.caption)
-                self.assertNotIn("Business", media.caption)
+                    self.assertIn(wallet, media["caption"])
                 if action == "wallet:payout":
-                    self.assertNotIn("Google Pay", media.caption)
-                    self.assertNotIn("Business", media.caption)
-                markup = query.edit_message_media.await_args.kwargs["reply_markup"]
+                    self.assertNotIn("Google Pay", media["caption"])
+                    self.assertNotIn("Business", media["caption"])
+                    self.assertEqual(
+                        media["caption"],
+                        (
+                            "◆ iPAY – SUPPORTED WALLETS\n\n"
+                            "💸 PAYOUT WALLETS\n"
+                            "▪️ PhonePe\n"
+                            "▪️ Paytm\n"
+                            "▪️ MobiKwik\n"
+                            "▪️ Freecharge\n\n"
+                            "◆ USE SUPPORTED WALLETS FOR SMOOTH PAYOUTS!"
+                        ),
+                    )
+                else:
+                    self.assertIn("Google Pay Business", media["caption"])
+                    self.assertIn("PhonePe Business", media["caption"])
+                    self.assertIn("Paytm Business", media["caption"])
+                    self.assertIn(
+                        "Business wallets are recommended for smoother collections.",
+                        media["caption"],
+                    )
+                markup = media["reply_markup"]
                 self.assertEqual(
                     [button.callback_data for row in markup.inline_keyboard for button in row],
                     [

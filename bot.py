@@ -22,7 +22,6 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputFile,
-    InputMediaPhoto,
     Update,
 )
 from telegram.constants import ChatAction, ChatType
@@ -68,6 +67,13 @@ ICON_BOOKMARK = "\U0001f516"
 ICON_PIN = "\U0001f4cc"
 ICON_SPARKLE = "\U0001f4ab"
 ICON_ARROW = "\u27a1\ufe0f"
+ICON_SECURITY = "🛡️"
+ICON_WALLET = "💼"
+ICON_COMMISSION = "💰"
+ICON_UPI_LOCKED = "🚫"
+ICON_ORDER_LOCKED = "🔐"
+ICON_GUIDE = "🧭"
+ICON_WITHDRAWAL = "📥"
 
 # Telegram Premium Custom Emojis (from NewsEmoji and VickyTricks)
 CE_BOOST = '<tg-emoji emoji-id="6118531988073747281">⚡</tg-emoji>'
@@ -116,13 +122,14 @@ _DB_SCHEMA_LOCK = threading.Lock()
 _DB_INITIALIZED_PATHS: set[str] = set()
 
 WELCOME = (
-    f"{CE_BOOST} <b>WELCOME TO iPAY</b> {CE_FIRE}\n\n"
-    "Your guide to wallets, payments, and support:\n\n"
-    f"{ICON_BOOKMARK} Up to 4% commission on eligible completed orders\n\n"
-    f"{ICON_BOOKMARK} Rewards on selected activity orders\n\n"
-    f"{ICON_BOOKMARK} Quick access to withdrawal support guidance\n\n"
-    f"{ICON_BOOKMARK} A scalable platform for earning opportunities"
+    "⚡ <b>WELCOME TO iPAY</b> 🔥\n\n"
+    "📈 Up to 4% commission on eligible completed orders\n\n"
+    "💸 Rewards on selected activity orders\n\n"
+    "🖥️ Quick access to withdrawal support guidance\n\n"
+    "🪧 A scalable platform for earning opportunities\n\n"
+    "🕹️ Choose iPAY, choose a smarter path forward."
 )
+ISSUES_PROMPT = "🔍 Identify your issue and click the button below to get the appropriate solution. 👇"
 
 SYSTEM_RULES = """You are iPay's multilingual customer-support assistant.
 Detect the language and script of the latest user message, including mixed-language
@@ -244,11 +251,11 @@ def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(f"{ICON_LOCATION} WALLETS", callback_data="menu:wallets"),
+                InlineKeyboardButton(f"{ICON_WALLET} WALLETS", callback_data="menu:wallets"),
                 InlineKeyboardButton(f"{ICON_CHECK} ISSUES", callback_data="menu:issues"),
             ],
             [
-                InlineKeyboardButton(f"{ICON_PIN} SECURITY", callback_data="menu:security"),
+                InlineKeyboardButton(f"{ICON_SECURITY} SECURITY", callback_data="menu:security"),
                 InlineKeyboardButton(f"{ICON_MESSAGE} SUPPORT", callback_data="menu:support"),
             ],
             [start_button],
@@ -272,16 +279,16 @@ def issues_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(f"{ICON_CHECK} Deposit problem", callback_data="issue:deposit"),
-                InlineKeyboardButton(f"{ICON_CHECK} Withdrawal problem", callback_data="issue:withdrawal"),
+                InlineKeyboardButton(f"{ICON_CHECK} Deposit", callback_data="issue:deposit"),
+                InlineKeyboardButton(f"{ICON_WITHDRAWAL} Withdrawal", callback_data="issue:withdrawal"),
             ],
             [
-                InlineKeyboardButton(f"{ICON_BOOKMARK} User Guide", callback_data="issue:guide"),
-                InlineKeyboardButton(f"{ICON_PIN} Commission", callback_data="issue:commission"),
+                InlineKeyboardButton(f"{ICON_GUIDE} Guide", callback_data="issue:guide"),
+                InlineKeyboardButton(f"{ICON_COMMISSION} Commission", callback_data="issue:commission"),
             ],
             [
-                InlineKeyboardButton(f"{ICON_PIN} UPI blocked / locked", callback_data="issue:upi"),
-                InlineKeyboardButton(f"{ICON_PIN} Order locked", callback_data="issue:locked"),
+                InlineKeyboardButton(f"{ICON_UPI_LOCKED} UPI locked", callback_data="issue:upi"),
+                InlineKeyboardButton(f"{ICON_ORDER_LOCKED} Order locked", callback_data="issue:locked"),
             ],
             [_support_button(), _back_button()],
         ]
@@ -409,15 +416,31 @@ CALLBACK_ROUTES = {
 
 
 def _wallet_caption(mode: str = "overview") -> str:
-    payin_wallets = "\n".join(
-        f"{ICON_CHECK} {wallet}"
-        for wallet in ("PhonePe", "Paytm", "MobiKwik", "Freecharge")
-    )
-    payout_wallets = payin_wallets
+    heading = "◆ iPAY – SUPPORTED WALLETS"
     if mode == "payin":
-        return f"{ICON_LOCATION} SUPPORTED WALLETS\n\nPAYIN\n\n{payin_wallets}"
+        return (
+            f"{heading}\n\n"
+            "📈 PAYIN WALLETS\n"
+            "▪️ ✅ PhonePe\n"
+            "▪️ ✅ Paytm\n"
+            "▪️ ✅ MobiKwik\n"
+            "▪️ ✅ Freecharge\n\n"
+            "💼 BUSINESS WALLETS\n"
+            "▪️ Google Pay Business\n"
+            "▪️ PhonePe Business\n"
+            "▪️ Paytm Business\n\n"
+            "⚠️ Business wallets are recommended for smoother collections."
+        )
     if mode == "payout":
-        return f"{ICON_LOCATION} SUPPORTED WALLETS\n\nPAYOUT\n\n{payout_wallets}"
+        return (
+            f"{heading}\n\n"
+            "💸 PAYOUT WALLETS\n"
+            "▪️ PhonePe\n"
+            "▪️ Paytm\n"
+            "▪️ MobiKwik\n"
+            "▪️ Freecharge\n\n"
+            "◆ USE SUPPORTED WALLETS FOR SMOOTH PAYOUTS!"
+        )
     if mode == "relink":
         return (
             f"{ICON_ARROW} WALLET RELINKING GUIDE\n\n"
@@ -1310,10 +1333,7 @@ async def issues_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not message:
         return
     _remember_menu_page(context, update, "menu:issues")
-    caption = (
-        "Choose the issue that best matches what happened. For a specific "
-        "problem, you can also describe it in a message."
-    )
+    caption = ISSUES_PROMPT
     if not ISSUES_IMAGE_PATH.is_file():
         log.warning("Issues image is missing: %s", ISSUES_IMAGE_PATH.name)
         await message.reply_text(caption, reply_markup=issues_keyboard())
@@ -1550,7 +1570,7 @@ def _resolution_for_issue(issue: str) -> Optional[Dict[str, Any]]:
 
 
 def _compact_issue_guidance(issue: str, text: str) -> str:
-    if issue in {"withdrawal", "commission"}:
+    if issue == "commission":
         text = text.split("\n\nWHAT TO DO NEXT", maxsplit=1)[0]
     return text.rstrip()
 
@@ -1570,29 +1590,30 @@ def _issue_answer(issue: str) -> Tuple[str, str]:
         )
     answers = {
         "deposit": (
-            "DEPOSIT PROBLEM\n\n"
-            "CHECK THESE KEY POINTS\n"
-            "- Verify the recipient, exact amount, wallet, and order expiry.\n"
-            "- Use the wallet linked to iPay; do not use Pocket UPI.\n\n"
-            "WHAT TO DO NEXT\n"
-            "- If you paid, submit the matching UTR and payment screenshot in iPay.\n"
-            "- If status is uncertain or the order expired, request a status check "
-            "before paying again.\n"
-            "- Contact support if it remains unresolved.",
+            "◆ iPAY – DEPOSIT ISSUE\n\n"
+            "➡️ IMPORTANT CHECKS\n"
+            "▪️ Check the payment details and order expiry.\n"
+            "▪️ Use your iPay-linked wallet only.\n"
+            "▪️ Do not use Pocket UPI.\n\n"
+            "🎯 NEXT STEPS\n"
+            "✅ Paid? Submit your UTR and payment screenshot.\n"
+            "⏳ Payment pending? Check the status before paying again.\n"
+            "📞 Still facing issues? Contact iPay support.\n\n"
+            "◆ CHECK FIRST – PAY SAFELY!",
             "deposit payment order UTR screenshot expired",
         ),
         "withdrawal": (
-            "DELAYED WITHDRAWAL\n\n"
-            "CHECK THESE KEY POINTS\n"
-            "- Verify that your receiving limit has not been reached.\n"
-            "- Confirm UPI is enabled and your account can receive funds.\n"
-            "- Check that your wallet is connected.\n\n"
-            "WHAT TO DO NEXT\n"
-            "- Keep your order records.\n"
-            "- Ask support to check the pending withdrawal.\n\n"
-            "IMPORTANT\n"
-            "- Do not submit a duplicate withdrawal.\n"
-            "- Processing times can vary; contact support for an update.",
+            "🧾 iPAY – DELAYED WITHDRAWAL\n\n"
+            "➡️ IMPORTANT CHECKS\n"
+            "▪️ Check your daily UPI receiving limit.\n"
+            "▪️ Make sure UPI is active.\n"
+            "▪️ Ensure your bank account can receive payments.\n"
+            "▪️ Check your wallet connection.\n"
+            "▪️ Try relinking your wallet if needed.\n\n"
+            "🎯 WHAT TO DO\n"
+            "▪️ ⏳ Wait for the status update.\n"
+            "▪️ 📞 Contact iPay support if the delay continues.\n\n"
+            "◆ CHECK • VERIFY • STAY UPDATED!",
             "withdrawal pending receiving limit UPI wallet",
         ),
         "rewards": (
@@ -1696,8 +1717,7 @@ async def _replace_callback_image(
         return False
     if not image_path.is_file():
         log.warning("Menu image is missing: %s", image_path.name)
-        await _present_callback(update, caption, keyboard)
-        return True
+        return await _replace_callback_text(update, caption, keyboard)
 
     cache_key = _image_cache_key(image_path)
     file_id = PHOTO_FILE_IDS.get(cache_key)
@@ -1758,95 +1778,30 @@ async def _replace_callback_image(
             )
         return True
 
-    if message.photo:
-        try:
-            if file_id:
-                media = InputMediaPhoto(media=file_id, caption=caption[:1024], parse_mode="HTML")
-                edited_message = await query.edit_message_media(
-                    media=media,
-                    reply_markup=keyboard,
-                )
-            else:
-                with image_path.open("rb") as image:
-                    media = InputMediaPhoto(
-                        media=InputFile(image),
-                        caption=caption[:1024],
-                        parse_mode="HTML",
-                    )
-                    edited_message = await query.edit_message_media(
-                        media=media,
-                        reply_markup=keyboard,
-                    )
-            _remember_photo_file_id(image_path, edited_message)
-            return True
-        except BadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                return True
-            if file_id:
-                PHOTO_FILE_IDS.pop(cache_key, None)
-                try:
-                    with image_path.open("rb") as image:
-                        edited_message = await query.edit_message_media(
-                            media=InputMediaPhoto(
-                                media=InputFile(image),
-                                caption=caption[:1024],
-                                parse_mode="HTML",
-                            ),
-                            reply_markup=keyboard,
-                        )
-                    _remember_photo_file_id(image_path, edited_message)
-                    return True
-                except (OSError, TelegramError) as retry_exc:
-                    log.warning(
-                        "Could not replace menu image after retry (%s): %s",
-                        type(retry_exc).__name__,
-                        retry_exc,
-                    )
-            log.warning(
-                "Could not edit menu image (%s): %s; sending requested image",
-                type(exc).__name__,
-                exc,
-            )
-        except (OSError, TelegramError) as exc:
-            log.warning(
-                "Could not edit menu image (%s): %s; sending requested image",
-                type(exc).__name__,
-                exc,
-            )
-        return await send_new_image()
+    return await send_new_image()
 
-    try:
-        reply_kwargs = {"reply_markup": keyboard}
-        if caption:
-            reply_kwargs["caption"] = caption[:1024]
-        if file_id:
-            sent_message = await message.reply_photo(photo=file_id, **reply_kwargs)
-        else:
-            with image_path.open("rb") as image:
-                sent_message = await message.reply_photo(
-                    photo=InputFile(image),
-                    **reply_kwargs,
-                )
-        _remember_photo_file_id(image_path, sent_message)
-    except (OSError, TelegramError) as exc:
-        log.error("Could not send menu image (%s): %s", type(exc).__name__, exc)
+
+async def _replace_callback_text(
+    update: Update,
+    text: str,
+    keyboard: InlineKeyboardMarkup,
+) -> bool:
+    query = update.callback_query
+    message = query.message if query else None
+    if not query or not message:
         return False
-
+    try:
+        await message.reply_text(text, reply_markup=keyboard)
+    except TelegramError as exc:
+        log.error("Could not send replacement menu text (%s): %s", type(exc).__name__, exc)
+        return False
     try:
         await query.delete_message()
     except BadRequest as exc:
         if "message to delete not found" not in str(exc).lower():
-            log.warning(
-                "Could not remove previous menu after sending its image (%s): %s",
-                type(exc).__name__,
-                exc,
-            )
+            log.warning("Could not remove previous menu (%s): %s", type(exc).__name__, exc)
     except TelegramError as exc:
-        log.warning(
-            "Could not remove previous menu after sending its image (%s): %s",
-            type(exc).__name__,
-            exc,
-        )
+        log.warning("Could not remove previous menu (%s): %s", type(exc).__name__, exc)
     return True
 
 
@@ -1868,35 +1823,7 @@ async def _present_callback(
     text: str,
     keyboard: InlineKeyboardMarkup,
 ) -> None:
-    query = update.callback_query
-    if not query or not query.message:
-        return
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(
-                caption=text[:1024],
-                reply_markup=keyboard,
-                parse_mode="HTML",
-            )
-        except (BadRequest, TelegramError) as exc:
-            if "message is not modified" in str(exc).lower():
-                return
-            log.error(
-                "Could not update the current image menu (%s): %s",
-                type(exc).__name__,
-                exc,
-            )
-    else:
-        try:
-            await query.edit_message_text(text, reply_markup=keyboard)
-        except (BadRequest, TelegramError) as exc:
-            if "message is not modified" in str(exc).lower():
-                return
-            log.error(
-                "Could not update the current menu message (%s): %s",
-                type(exc).__name__,
-                exc,
-            )
+    await _replace_callback_text(update, text, keyboard)
 
 
 async def _show_home_menu(update: Update) -> None:
@@ -1928,7 +1855,7 @@ async def _show_support_menu(update: Update) -> None:
 
 
 async def _show_issues_menu(update: Update) -> None:
-    caption = "Choose the issue that best matches what happened."
+    caption = ISSUES_PROMPT
     keyboard = issues_keyboard()
     if not await _replace_callback_image(
         update,
@@ -1936,7 +1863,7 @@ async def _show_issues_menu(update: Update) -> None:
         caption,
         keyboard,
     ):
-        await _present_callback(update, caption, keyboard)
+        log.error("Could not display the Issues menu")
 
 
 async def _show_security_menu(update: Update) -> None:
@@ -2073,23 +2000,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ),
         "issue:upi": (
             "upi_locked.jpg",
-            "UPI BLOCKED OR LOCKED\n\n"
-            "CHECK THESE KEY POINTS\n"
-            "- Follow the instructions shown in the iPay app.\n"
-            "- Check whether your bank or wallet provider shows a restriction.\n\n"
-            "IMPORTANT\n"
-            "- Avoid repeated attempts while the account is locked.\n"
-            "- Only make a ₹1 transfer to your own UPI if the app instructs you.\n"
-            "- For a provider-level block, contact your bank or wallet provider.\n"
-            "- Contact support if the issue remains.",
+            "◆ iPAY – UPI BLOCKED / LOCKED\n\n"
+            "🔍 IMPORTANT CHECKS\n"
+            "📱 Follow the instructions shown in the above image.\n"
+            "🏦 Check for restrictions from your bank or wallet provider.\n\n"
+            "⚙️ WHAT TO DO NEXT\n"
+            "🚫 Avoid repeated payment attempts while UPI is locked.\n"
+            "💸 Make a ₹1 transfer to your own UPI only if instructed by the app.\n"
+            "🏦 Contact your bank or wallet provider if UPI is blocked.\n"
+            "📞 Contact iPay support if the issue continues.",
         ),
         "issue:locked": (
             "order_locked.jpg",
-            "ORDER LOCKED\n\n"
-            "WHAT TO DO NEXT\n"
-            "- Check the wallet status and follow the instructions in the iPay app.\n"
-            "- Do not log in through third-party apps or make duplicate payments.\n"
-            "- Ask support for account-specific help.",
+            "◆ iPAY – ORDER LOCKED\n\n"
+            "🔍 WHAT TO DO NEXT\n\n"
+            "📱 Check your wallet status and follow the iPay app instructions.\n"
+            "🔄 Relink your wallet and wait for the system to process.\n"
+            "🚫 Avoid third-party logins and duplicate payments.\n"
+            "⏳ The system updates every 10 minutes. Keep your wallet ready and wait "
+            "for processing.\n"
+            "📞 Contact iPay support if the issue continues.\n\n"
+            "◆ RELINK • WAIT • STAY UPDATED!",
         ),
     }
     if action in custom_image_actions:
@@ -2108,7 +2039,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             full_caption,
             keyboard,
         ):
-            await _present_callback(update, full_caption, keyboard)
+            await _replace_callback_text(update, full_caption, keyboard)
         return
     if action.startswith("issue:"):
         issue = action.partition(":")[2]
@@ -2128,7 +2059,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 keyboard,
             ):
                 return
-        await _present_callback(update, text, keyboard)
+        await _replace_callback_text(update, text, keyboard)
         return
 
     log.warning("Received unrecognized callback action")
@@ -2384,23 +2315,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else chat.id
     )
     try:
-        streamed_message = None
-        last_edit_at = 0.0
         chat_action_task = None
-
-        async def update_streamed_answer(partial_answer: str) -> None:
-            nonlocal streamed_message, last_edit_at
-            if not partial_answer.strip():
-                return
-            if streamed_message is None:
-                if len(partial_answer.strip()) < 24 and "\n" not in partial_answer:
-                    return
-                streamed_message = await message.reply_text(partial_answer)
-                last_edit_at = time.monotonic()
-                return
-            if time.monotonic() - last_edit_at >= 1.0:
-                await streamed_message.edit_text(partial_answer)
-                last_edit_at = time.monotonic()
 
         bot = getattr(context, "bot", None)
         if bot and hasattr(bot, "send_chat_action"):
@@ -2412,7 +2327,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             conversation_id,
             guide,
             ai_client,
-            update_streamed_answer,
+            None,
             _enabled_languages(),
             pre_retrieved_pages,
         )
@@ -2424,12 +2339,9 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             answer
             + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
         )
-        if streamed_message is not None:
-            await streamed_message.edit_text(answer_with_support)
         if pages and pages[0].image_path:
             await _send_guide_page(message, pages[0])
-        if streamed_message is None:
-            await message.reply_text(answer_with_support)
+        await message.reply_text(answer_with_support)
     except Exception as exc:
         if chat_action_task and not chat_action_task.done():
             chat_action_task.cancel()
@@ -2439,16 +2351,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _ai_unavailable_answer(question, guide)
             + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
         )
-        if streamed_message is not None:
-            await streamed_message.edit_text(
-                fallback,
-                reply_markup=support_options_keyboard(),
-            )
-        else:
-            await message.reply_text(
-                fallback,
-                reply_markup=support_options_keyboard(),
-            )
+        await message.reply_text(
+            fallback,
+            reply_markup=support_options_keyboard(),
+        )
 
 
 async def _post_init(application: Application) -> None:
