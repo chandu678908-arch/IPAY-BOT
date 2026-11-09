@@ -956,6 +956,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\U0001F504 Check that your wallet is linked correctly in the iPAY app.",
             "\U0001F4BC Confirm in the app that your wallet is eligible for collections.",
             "\U0001F6AB Avoid submitting another request while one is already pending.",
+            "\u2705 Your UID was received for the withdrawal boost. Please wait and check the iPAY app for status.",
             "\u25C6 iPAY \u2013 MOVE WITH PURPOSE!",
         ),
         (
@@ -963,6 +964,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "",
             "",
             "",
+            "\u2705 We received your UID for the withdrawal boost. Please wait and follow its status in the iPAY app.",
             "\u25C6 iPAY \u2013 SMART MOVES, STEADY PROGRESS!",
         ),
         (
@@ -970,6 +972,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\U0001F4F2 Make sure your app and payment details are up to date.",
             "",
             "\U0001F512 Never share your password, OTP, or PIN with anyone.",
+            "\u2705 Your UID for the withdrawal boost has been received. Please wait and check its status in the iPAY app.",
             "\u25C6 iPAY \u2013 KEEP YOUR ACCOUNT SECURE!",
         ),
         (
@@ -977,6 +980,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\U0001F504 Recheck that the correct wallet is connected to your account.",
             "\U0001F4BC Review the wallet requirements shown in the iPAY app.",
             "\U0001F4B3 Check your wallet's receiving limits before requesting a payout.",
+            "\u2705 The UID for your withdrawal boost was received. Please wait for updates and check the iPAY app.",
             "\u25C6 iPAY \u2013 CHECK, CONFIRM, THEN CONTINUE!",
         ),
         (
@@ -984,6 +988,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "",
             "",
             "",
+            "\u2705 We have your UID for the withdrawal boost. Please wait and check the iPAY app for the latest status.",
             "\u25C6 iPAY \u2013 YOUR NEXT STEP STARTS HERE!",
         ),
         (
@@ -991,6 +996,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\u2705 Check your wallet connection and payment details in the app.",
             "",
             "",
+            "\u2705 Your withdrawal boost UID was received. Please wait and review the status in the iPAY app.",
             "\u25C6 iPAY \u2013 CLEAR STEPS, CONFIDENT MOVES!",
         ),
         (
@@ -998,6 +1004,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\U0001F4B3 Verify that your selected wallet meets the app's collection requirements.",
             "",
             "\U0001F6AB Avoid repeated payout attempts until you have checked the current status.",
+            "\u2705 UID received for the withdrawal boost. Please wait and check the iPAY app for a status update.",
             "\u25C6 iPAY \u2013 KEEP MOVING FORWARD!",
         ),
     )
@@ -1007,7 +1014,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         style_index = (user_data.get("boost_reply_style_index", -1) + 1) % len(reply_styles)
         user_data["boost_reply_style_index"] = style_index
-    heading, status, guidance, extra_tip, caption = reply_styles[style_index]
+    heading, status, guidance, extra_tip, acknowledgment, caption = reply_styles[style_index]
     reply_body = "\n".join(
         line.format(uid=safe_uid)
         for line in (status, guidance, extra_tip)
@@ -1021,9 +1028,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if reply_body:
         notice_text += f"{reply_body}\n\n"
     notice_text += (
-        "This bot cannot activate a withdrawal boost or verify its status.\n"
-        "Contact support: "
-        f"{escape(SUPPORT_1)} or {escape(SUPPORT_2)}.\n\n"
+        f"{acknowledgment}\n\n"
         f"{caption}"
     )
     await message.reply_text(
