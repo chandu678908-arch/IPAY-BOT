@@ -107,6 +107,10 @@ GUIDE_IMAGE_DIR = Path(os.getenv("GUIDE_IMAGE_DIR", "guide_pages"))
 CUSTOM_IMAGES_DIR = _asset_path(os.getenv("CUSTOM_IMAGES_DIR", "custom_images"))
 KNOWLEDGE_PATH = Path(os.getenv("KNOWLEDGE_PATH", "knowledge_base.md"))
 DB_PATH = os.getenv("DB_PATH", "ipay_bot.sqlite3")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_SECRET_KEY = (
+    os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+).strip()
 RATE_LIMIT_SECONDS = max(0.5, float(os.getenv("RATE_LIMIT_SECONDS", "2")))
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
 ADMIN_USER_IDS = {
@@ -122,6 +126,8 @@ PHOTO_FILE_IDS: Dict[str, str] = {}
 _INSTANCE_LOCK_HANDLE = None
 _DB_SCHEMA_LOCK = threading.Lock()
 _DB_INITIALIZED_PATHS: set[str] = set()
+_SUPABASE_CLIENT = None
+_SUPABASE_CLIENT_LOCK = threading.Lock()
 
 WELCOME = (
     "⚡ <b>WELCOME TO iPAY</b> 🔥\n\n"
@@ -538,13 +544,65 @@ def db() -> sqlite3.Connection:
     return conn
 
 
+def supabase_enabled() -> bool:
+    return bool(SUPABASE_URL or SUPABASE_SECRET_KEY)
+
+
+def supabase_client():
+    global _SUPABASE_CLIENT
+    if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
+        raise RuntimeError(
+            "Set both SUPABASE_URL and the server-only SUPABASE_SECRET_KEY. "
+            "The publishable key is not sufficient for this bot's private data."
+        )
+    if _SUPABASE_CLIENT is None:
+        with _SUPABASE_CLIENT_LOCK:
+            if _SUPABASE_CLIENT is None:
+                from supabase import create_client
+
+                _SUPABASE_CLIENT = create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
+    return _SUPABASE_CLIENT
+
+
+def initialize_supabase_storage() -> None:
+    if not supabase_enabled():
+        return
+    # Fail early if credentials, the Data API, or any required table is missing.
+    client = supabase_client()
+    for table, column in (
+        ("messages", "id"),
+        ("users", "user_id"),
+        ("settings", "key"),
+        ("custom_faqs", "key"),
+        ("unanswered_questions", "id"),
+    ):
+        client.table(table).select(column).limit(1).execute()
+
+
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("settings")
+            .select("value")
+            .eq("key", key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0]["value"] if rows else default
     with closing(db()) as conn:
         row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return row[0] if row else default
 
 
 def set_setting(key: str, value: str) -> None:
+    if supabase_enabled():
+        supabase_client().table("settings").upsert(
+            {"key": key, "value": value, "updated_at": int(time.time())}
+        ).execute()
+        return
     with closing(db()) as conn:
         conn.execute(
             """INSERT INTO settings(key, value, updated_at) VALUES(?,?,?)
@@ -556,6 +614,17 @@ def set_setting(key: str, value: str) -> None:
 
 
 def save_custom_faq(key: str, title: str, keywords: List[str], answer: str) -> None:
+    if supabase_enabled():
+        supabase_client().table("custom_faqs").upsert(
+            {
+                "key": key,
+                "title": title,
+                "keywords": keywords,
+                "answer": answer,
+                "updated_at": int(time.time()),
+            }
+        ).execute()
+        return
     with closing(db()) as conn:
         conn.execute(
             """INSERT INTO custom_faqs(key, title, keywords, answer, updated_at)
@@ -568,6 +637,16 @@ def save_custom_faq(key: str, title: str, keywords: List[str], answer: str) -> N
 
 
 def remove_custom_faq(key: str) -> bool:
+    if supabase_enabled():
+        response = (
+            supabase_client()
+            .table("custom_faqs")
+            .delete()
+            .eq("key", key)
+            .select("key")
+            .execute()
+        )
+        return bool(response.data)
     with closing(db()) as conn:
         cursor = conn.execute("DELETE FROM custom_faqs WHERE key=?", (key,))
         conn.commit()
@@ -575,6 +654,27 @@ def remove_custom_faq(key: str) -> bool:
 
 
 def list_custom_faqs() -> List[Dict[str, Any]]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("custom_faqs")
+            .select("key, title, keywords, answer")
+            .order("key")
+            .execute()
+            .data
+            or []
+        )
+        return [
+            {
+                **row,
+                "keywords": (
+                    json.loads(row["keywords"])
+                    if isinstance(row.get("keywords"), str)
+                    else row.get("keywords", [])
+                ),
+            }
+            for row in rows
+        ]
     with closing(db()) as conn:
         rows = conn.execute(
             "SELECT key, title, keywords, answer FROM custom_faqs ORDER BY key"
@@ -588,6 +688,38 @@ def list_custom_faqs() -> List[Dict[str, Any]]:
 def record_unanswered_question(question: str) -> None:
     question = question.strip()[:500]
     if not question:
+        return
+    if supabase_enabled():
+        client = supabase_client()
+        now = int(time.time())
+        recent = (
+            client.table("unanswered_questions")
+            .select("id")
+            .eq("question", question)
+            .gt("created_at", now - 86400)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not recent:
+            client.table("unanswered_questions").insert(
+                {"question": question, "created_at": now, "reviewed": False}
+            ).execute()
+        overflow = (
+            client.table("unanswered_questions")
+            .select("id")
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+            .range(500, 999)
+            .execute()
+            .data
+            or []
+        )
+        if overflow:
+            client.table("unanswered_questions").delete().in_(
+                "id", [row["id"] for row in overflow]
+            ).execute()
         return
     with closing(db()) as conn:
         conn.execute(
@@ -608,6 +740,19 @@ def record_unanswered_question(question: str) -> None:
 
 
 def get_unanswered_questions(limit: int = 20) -> List[Tuple[int, str, int]]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("unanswered_questions")
+            .select("id, question, created_at")
+            .eq("reviewed", False)
+            .order("id", desc=True)
+            .limit(max(1, min(limit, 50)))
+            .execute()
+            .data
+            or []
+        )
+        return [(row["id"], row["question"], row["created_at"]) for row in rows]
     with closing(db()) as conn:
         return conn.execute(
             "SELECT id, question, created_at FROM unanswered_questions "
@@ -622,6 +767,18 @@ def save_user_uid(
     first_name: Optional[str],
     uid: str,
 ) -> None:
+    if supabase_enabled():
+        supabase_client().table("users").upsert(
+            {
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+                "uid": uid,
+                "updated_at": int(time.time()),
+            },
+            on_conflict="user_id",
+        ).execute()
+        return
     with closing(db()) as conn:
         conn.execute(
             """INSERT INTO users(user_id, username, first_name, uid, updated_at)
@@ -637,6 +794,19 @@ def save_user_uid(
 
 
 def get_user_by_uid(uid: str) -> Optional[Dict[str, Any]]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("users")
+            .select("user_id, username, first_name, uid, updated_at")
+            .eq("uid", uid)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
     with closing(db()) as conn:
         row = conn.execute(
             "SELECT user_id, username, first_name, uid, updated_at "
@@ -655,6 +825,18 @@ def get_user_by_uid(uid: str) -> Optional[Dict[str, Any]]:
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("users")
+            .select("user_id, username, first_name, uid, updated_at")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
     with closing(db()) as conn:
         row = conn.execute(
             "SELECT user_id, username, first_name, uid, updated_at "
@@ -673,6 +855,27 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 def add_message(chat_id: int, role: str, content: str) -> None:
+    if supabase_enabled():
+        client = supabase_client()
+        client.table("messages").insert(
+            {"chat_id": chat_id, "role": role, "content": content[:4000], "created_at": int(time.time())}
+        ).execute()
+        overflow = (
+            client.table("messages")
+            .select("id")
+            .eq("chat_id", chat_id)
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+            .range(12, 999)
+            .execute()
+            .data
+            or []
+        )
+        if overflow:
+            client.table("messages").delete().in_(
+                "id", [row["id"] for row in overflow]
+            ).execute()
+        return
     with closing(db()) as conn:
         conn.execute(
             "INSERT INTO messages(chat_id, role, content, created_at) VALUES(?,?,?,?)",
@@ -688,6 +891,20 @@ def add_message(chat_id: int, role: str, content: str) -> None:
 
 
 def get_history(chat_id: int) -> List[Dict[str, str]]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("messages")
+            .select("role, content")
+            .eq("chat_id", chat_id)
+            .order("created_at")
+            .order("id")
+            .limit(12)
+            .execute()
+            .data
+            or []
+        )
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
     with closing(db()) as conn:
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE chat_id=? "
@@ -2562,7 +2779,10 @@ def main() -> None:
         )
     acquire_instance_lock(TELEGRAM_BOT_TOKEN)
     start_keep_alive_server()
-    db().close()
+    if supabase_enabled():
+        initialize_supabase_storage()
+    else:
+        db().close()
     application = build_application(TELEGRAM_BOT_TOKEN)
     log.info("Starting iPay bot polling")
     application.run_polling(

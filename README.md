@@ -38,3 +38,16 @@ UID-validated support handler. Other commands and ordinary messages do not
 receive bot replies. Each boost request must contain exactly one six-digit UID.
 Menu navigation edits the welcome message rather than posting a new message
 for each screen.
+
+## Supabase storage
+
+The bot uses SQLite by default. To store bot data in Supabase, first run
+[`supabase/schema.sql`](supabase/schema.sql) once in the Supabase SQL Editor.
+Install dependencies with `pip install -r requirements.txt`, then set
+`SUPABASE_URL` and `SUPABASE_SECRET_KEY` in the bot's private environment (or
+the hosting service's secret settings). The secret key must stay on the bot
+server; do not put it in source control or use the publishable key for this
+private server-side data. When both variables are set, the bot uses Supabase
+for users, settings, custom FAQs, unanswered questions, and message history.
+When they are empty, it keeps using SQLite. Existing SQLite rows are not
+automatically copied to Supabase.
