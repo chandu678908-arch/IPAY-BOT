@@ -19,6 +19,11 @@ create table if not exists public.users (
     updated_at bigint not null,
     primary key (user_id, uid)
 );
+-- CREATE TABLE IF NOT EXISTS does not update an existing users table's keys.
+-- This unique index makes the bot's ON CONFLICT (user_id, uid) upsert valid
+-- for both new installs and the earlier schema with user_id as the primary key.
+create unique index if not exists idx_users_user_uid
+    on public.users (user_id, uid);
 create index if not exists idx_users_uid on public.users (uid);
 
 create table if not exists public.boost_cooldowns (
