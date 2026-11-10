@@ -2018,10 +2018,12 @@ class BotTests(unittest.TestCase):
             asyncio.run(bot.boost_command(update, context))
         save_user_uid.assert_called_once_with(333, "test_user", "Test", "749488")
         response = message.reply_text.await_args.args[0]
-        self.assertIn("📩 <b>WITHDRAWAL SUPPORT DETAILS</b>", response)
-        self.assertIn("👤 <b>User:</b> @test_user", response)
+        self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
+        self.assertIn("User:</b> @test_user", response)
         self.assertIn("UID:</b> 749488", response)
-        self.assertIn("cannot activate a withdrawal boost", response)
+        self.assertIn("Your UID was received for the withdrawal boost", response)
+        self.assertNotIn("cannot activate a withdrawal boost", response)
+        self.assertNotIn("Contact support:", response)
         self.assertNotIn("Priority Support Activated", response)
         self.assertTrue(response.endswith("◆ iPAY – MOVE WITH PURPOSE!"))
         self.assertNotIn("reply_markup", message.reply_text.await_args.kwargs)
@@ -2063,7 +2065,7 @@ class BotTests(unittest.TestCase):
             self.assertIn("894235", notice_text)
             self.assertIn("USER SUPPORT NOTICE", notice_text)
 
-    def test_boost_command_does_not_claim_to_activate_priority_support(self):
+    def test_boost_command_uses_acknowledgment_without_support_footer(self):
         message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         update = SimpleNamespace(effective_message=message, effective_user=user)
@@ -2072,23 +2074,33 @@ class BotTests(unittest.TestCase):
             asyncio.run(bot.boost_command(update, context))
         response = message.reply_text.await_args.args[0]
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
-        self.assertIn("Contact support:", response)
+        self.assertIn("Your UID was received for the withdrawal boost", response)
+        self.assertNotIn("Contact support:", response)
+        self.assertNotIn("cannot activate a withdrawal boost", response)
         self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
         self.assertNotIn("Priority Support Activated", response)
 
-    def test_all_boost_reply_styles_explain_limits_and_offer_support(self):
+    def test_all_boost_reply_styles_have_unique_acknowledgments_and_captions(self):
         context = SimpleNamespace(args=["749488"], user_data={})
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
+        acknowledgments = []
+        captions = []
         for _ in range(7):
             message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
             update = SimpleNamespace(effective_message=message, effective_user=user)
             with patch.object(bot, "save_user_uid"):
                 asyncio.run(bot.boost_command(update, context))
             response = message.reply_text.await_args.args[0]
-            self.assertIn("cannot activate a withdrawal boost", response)
-            self.assertIn(f"{bot.SUPPORT_1} or {bot.SUPPORT_2}", response)
+            self.assertNotIn("cannot activate a withdrawal boost", response)
+            self.assertNotIn("Contact support:", response)
             self.assertNotIn("Priority Support Activated", response)
             self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
+            acknowledgments.append(
+                next(line for line in response.splitlines() if "withdrawal boost" in line.lower())
+            )
+            captions.append(response.splitlines()[-1])
+        self.assertEqual(len(set(acknowledgments)), 7)
+        self.assertEqual(len(set(captions)), 7)
 
     def test_ai_reply_triggers_boost_on_typos(self):
         message = SimpleNamespace(text="bost 789983", reply_text=AsyncMock(), message_id=123)
@@ -2103,7 +2115,8 @@ class BotTests(unittest.TestCase):
         response = message.reply_text.await_args.args[0]
         self.assertIn("789983", response)
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
-        self.assertIn("cannot activate a withdrawal boost", response)
+        self.assertIn("Your UID was received for the withdrawal boost", response)
+        self.assertNotIn("Contact support:", response)
 
 
 if __name__ == "__main__":
