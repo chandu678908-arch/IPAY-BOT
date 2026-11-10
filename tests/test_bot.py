@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pymupdf
 from telegram.error import BadRequest, Conflict
-from telegram.ext import CommandHandler
+from telegram.ext import CommandHandler, MessageHandler
 
 import bot
 from guide import Guide
@@ -19,6 +19,10 @@ class BotTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
+        self.supabase_url_patch = patch.object(bot, "SUPABASE_URL", "")
+        self.supabase_key_patch = patch.object(bot, "SUPABASE_SECRET_KEY", "")
+        self.supabase_url_patch.start()
+        self.supabase_key_patch.start()
         bot.PHOTO_FILE_IDS.clear()
         self.knowledge_path = self.root / "knowledge_base.md"
         self.knowledge_path.write_text(
@@ -28,6 +32,8 @@ class BotTests(unittest.TestCase):
         )
 
     def tearDown(self):
+        self.supabase_url_patch.stop()
+        self.supabase_key_patch.stop()
         self.temp_dir.cleanup()
 
     def test_http_request_logs_do_not_emit_tokens_at_info_level(self):
@@ -315,7 +321,14 @@ class BotTests(unittest.TestCase):
         ]
         self.assertEqual(len(boost_handlers), 1)
         self.assertEqual(boost_handlers[0].callback, bot.boost_command)
-        self.assertEqual(len(application.handlers[0]), 3)
+        caption_handlers = [
+            handler
+            for handler in application.handlers[0]
+            if isinstance(handler, MessageHandler)
+        ]
+        self.assertEqual(len(caption_handlers), 1)
+        self.assertEqual(caption_handlers[0].callback, bot.boost_caption_handler)
+        self.assertEqual(len(application.handlers[0]), 4)
 
     def test_only_start_and_boost_are_published_to_telegram(self):
         application = SimpleNamespace(
@@ -2009,12 +2022,67 @@ class BotTests(unittest.TestCase):
         message.reply_text.assert_awaited_once()
         self.assertIn("Invalid UID", message.reply_text.await_args.args[0])
 
+    def test_boost_command_limits_each_user_to_one_request_per_five_minutes(self):
+        db_path = self.root / "boost-cooldowns.sqlite3"
+        message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
+        user = SimpleNamespace(id=333, username="test_user", first_name="Test")
+        update = SimpleNamespace(effective_message=message, effective_user=user)
+        context = SimpleNamespace(args=["749488"], user_data={})
+        with patch.object(bot, "DB_PATH", db_path), \
+                patch.object(bot.time, "time", side_effect=[1000, 1100]), \
+                patch.object(bot, "save_user_uid"):
+            asyncio.run(bot.boost_command(update, context))
+            asyncio.run(bot.boost_command(update, context))
+        responses = [call.args[0] for call in message.reply_text.await_args_list]
+        self.assertEqual(len(responses), 2)
+        self.assertIn("Your UID was received", responses[0])
+        self.assertIn("Please wait 3m 20s", responses[1])
+        with patch.object(bot, "DB_PATH", db_path):
+            conn = bot.db()
+            try:
+                requests = conn.execute(
+                    "SELECT outcome, remaining_seconds FROM boost_requests "
+                    "WHERE user_id=? ORDER BY requested_at",
+                    (333,),
+                ).fetchall()
+            finally:
+                conn.close()
+        self.assertEqual(requests, [("received", 0), ("rate_limited", 200)])
+
+    def test_boost_caption_routes_uid_and_request_text(self):
+        db_path = self.root / "boost-caption.sqlite3"
+        message = SimpleNamespace(
+            caption="218532 boost my withdrawal",
+            reply_text=AsyncMock(),
+        )
+        user = SimpleNamespace(id=444, username="trader", first_name="Trader")
+        update = SimpleNamespace(effective_message=message, effective_user=user)
+        context = SimpleNamespace(args=[], user_data={})
+        with patch.object(bot, "DB_PATH", db_path), patch.object(bot, "save_user_uid"):
+            asyncio.run(bot.boost_caption_handler(update, context))
+        message.reply_text.assert_awaited_once()
+        response = message.reply_text.await_args.args[0]
+        self.assertIn("UID:</b> 218532", response)
+        self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
+        with patch.object(bot, "DB_PATH", db_path):
+            conn = bot.db()
+            try:
+                request = conn.execute(
+                    "SELECT uid, source, outcome FROM boost_requests WHERE user_id=?",
+                    (444,),
+                ).fetchone()
+            finally:
+                conn.close()
+        self.assertEqual(request, ("218532", "caption", "received"))
+
     def test_boost_command_has_no_inline_buttons(self):
         message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         update = SimpleNamespace(effective_message=message, effective_user=user)
         context = SimpleNamespace(args=["749488"])
-        with patch.object(bot, "save_user_uid") as save_user_uid:
+        with patch.object(bot, "save_user_uid") as save_user_uid, \
+                patch.object(bot, "reserve_boost_request", return_value=0), \
+                patch.object(bot, "record_boost_request"):
             asyncio.run(bot.boost_command(update, context))
         save_user_uid.assert_called_once_with(333, "test_user", "Test", "749488")
         response = message.reply_text.await_args.args[0]
@@ -2070,7 +2138,9 @@ class BotTests(unittest.TestCase):
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         update = SimpleNamespace(effective_message=message, effective_user=user)
         context = SimpleNamespace(args=["749488"])
-        with patch.object(bot, "save_user_uid"):
+        with patch.object(bot, "save_user_uid"), \
+                patch.object(bot, "reserve_boost_request", return_value=0), \
+                patch.object(bot, "record_boost_request"):
             asyncio.run(bot.boost_command(update, context))
         response = message.reply_text.await_args.args[0]
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
@@ -2085,20 +2155,22 @@ class BotTests(unittest.TestCase):
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         acknowledgments = []
         captions = []
-        for _ in range(7):
-            message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
-            update = SimpleNamespace(effective_message=message, effective_user=user)
-            with patch.object(bot, "save_user_uid"):
+        with patch.object(bot, "reserve_boost_request", return_value=0), \
+                patch.object(bot, "record_boost_request"), \
+                patch.object(bot, "save_user_uid"):
+            for _ in range(7):
+                message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
+                update = SimpleNamespace(effective_message=message, effective_user=user)
                 asyncio.run(bot.boost_command(update, context))
-            response = message.reply_text.await_args.args[0]
-            self.assertNotIn("cannot activate a withdrawal boost", response)
-            self.assertNotIn("Contact support:", response)
-            self.assertNotIn("Priority Support Activated", response)
-            self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
-            acknowledgments.append(
-                next(line for line in response.splitlines() if "withdrawal boost" in line.lower())
-            )
-            captions.append(response.splitlines()[-1])
+                response = message.reply_text.await_args.args[0]
+                self.assertNotIn("cannot activate a withdrawal boost", response)
+                self.assertNotIn("Contact support:", response)
+                self.assertNotIn("Priority Support Activated", response)
+                self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
+                acknowledgments.append(
+                    next(line for line in response.splitlines() if "withdrawal boost" in line.lower())
+                )
+                captions.append(response.splitlines()[-1])
         self.assertEqual(len(set(acknowledgments)), 7)
         self.assertEqual(len(set(captions)), 7)
 
@@ -2109,7 +2181,9 @@ class BotTests(unittest.TestCase):
         update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=user)
         app = SimpleNamespace(bot_data={"guide": MagicMock()})
         context = SimpleNamespace(application=app)
-        with patch.object(bot, "save_user_uid"):
+        with patch.object(bot, "save_user_uid"), \
+                patch.object(bot, "reserve_boost_request", return_value=0), \
+                patch.object(bot, "record_boost_request"):
             asyncio.run(bot.ai_reply(update, context))
         message.reply_text.assert_awaited_once()
         response = message.reply_text.await_args.args[0]

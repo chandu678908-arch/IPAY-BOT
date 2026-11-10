@@ -31,6 +31,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 from telegram.request import HTTPXRequest
 
@@ -112,6 +114,7 @@ SUPABASE_SECRET_KEY = (
     os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 ).strip()
 RATE_LIMIT_SECONDS = max(0.5, float(os.getenv("RATE_LIMIT_SECONDS", "2")))
+BOOST_COOLDOWN_SECONDS = 5 * 60
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
 ADMIN_USER_IDS = {
     int(value.strip())
@@ -507,13 +510,31 @@ def db() -> sqlite3.Connection:
                             created_at INTEGER NOT NULL
                         );
                         CREATE TABLE IF NOT EXISTS users (
-                            user_id INTEGER PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
                             username TEXT,
                             first_name TEXT,
                             uid TEXT NOT NULL,
-                            updated_at INTEGER NOT NULL
+                            updated_at INTEGER NOT NULL,
+                            PRIMARY KEY (user_id, uid)
                         );
                         CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
+                        CREATE TABLE IF NOT EXISTS boost_cooldowns (
+                            user_id INTEGER PRIMARY KEY,
+                            last_requested_at INTEGER NOT NULL
+                        );
+                        CREATE TABLE IF NOT EXISTS boost_requests (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            username TEXT,
+                            first_name TEXT,
+                            uid TEXT NOT NULL,
+                            requested_at INTEGER NOT NULL,
+                            outcome TEXT NOT NULL,
+                            remaining_seconds INTEGER NOT NULL DEFAULT 0,
+                            source TEXT NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_boost_requests_user_time
+                            ON boost_requests(user_id, requested_at DESC);
                         CREATE TABLE IF NOT EXISTS settings (
                             key TEXT PRIMARY KEY,
                             value TEXT NOT NULL,
@@ -572,11 +593,90 @@ def initialize_supabase_storage() -> None:
     for table, column in (
         ("messages", "id"),
         ("users", "user_id"),
+        ("boost_cooldowns", "user_id"),
+        ("boost_requests", "id"),
         ("settings", "key"),
         ("custom_faqs", "key"),
         ("unanswered_questions", "id"),
     ):
         client.table(table).select(column).limit(1).execute()
+
+
+def reserve_boost_request(user_id: int, now: int, cooldown_seconds: int) -> int:
+    """Atomically reserve a boost request; return remaining cooldown seconds."""
+    if supabase_enabled():
+        response = supabase_client().rpc(
+            "reserve_boost_request",
+            {
+                "p_user_id": user_id,
+                "p_now": now,
+                "p_cooldown_seconds": cooldown_seconds,
+            },
+        ).execute()
+        return max(0, int(response.data or 0))
+
+    with closing(db()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT last_requested_at FROM boost_cooldowns WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if row:
+            remaining = cooldown_seconds - (now - row[0])
+            if remaining > 0:
+                conn.rollback()
+                return remaining
+        conn.execute(
+            """INSERT INTO boost_cooldowns(user_id, last_requested_at) VALUES(?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   last_requested_at=excluded.last_requested_at""",
+            (user_id, now),
+        )
+        conn.commit()
+    return 0
+
+
+def record_boost_request(
+    user_id: int,
+    username: Optional[str],
+    first_name: Optional[str],
+    uid: str,
+    requested_at: int,
+    outcome: str,
+    remaining_seconds: int,
+    source: str,
+) -> None:
+    values = {
+        "user_id": user_id,
+        "username": username,
+        "first_name": first_name,
+        "uid": uid,
+        "requested_at": requested_at,
+        "outcome": outcome,
+        "remaining_seconds": remaining_seconds,
+        "source": source,
+    }
+    if supabase_enabled():
+        supabase_client().table("boost_requests").insert(values).execute()
+        return
+    with closing(db()) as conn:
+        conn.execute(
+            """INSERT INTO boost_requests(
+                   user_id, username, first_name, uid, requested_at,
+                   outcome, remaining_seconds, source
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                user_id,
+                username,
+                first_name,
+                uid,
+                requested_at,
+                outcome,
+                remaining_seconds,
+                source,
+            ),
+        )
+        conn.commit()
 
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -776,17 +876,16 @@ def save_user_uid(
                 "uid": uid,
                 "updated_at": int(time.time()),
             },
-            on_conflict="user_id",
+            on_conflict="user_id,uid",
         ).execute()
         return
     with closing(db()) as conn:
         conn.execute(
             """INSERT INTO users(user_id, username, first_name, uid, updated_at)
                VALUES(?,?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET
+               ON CONFLICT(user_id, uid) DO UPDATE SET
                    username=excluded.username,
                    first_name=excluded.first_name,
-                   uid=excluded.uid,
                    updated_at=excluded.updated_at""",
             (user_id, username, first_name, uid, int(time.time())),
         )
@@ -831,6 +930,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
             .table("users")
             .select("user_id, username, first_name, uid, updated_at")
             .eq("user_id", user_id)
+            .order("updated_at", desc=True)
             .limit(1)
             .execute()
             .data
@@ -840,7 +940,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     with closing(db()) as conn:
         row = conn.execute(
             "SELECT user_id, username, first_name, uid, updated_at "
-            "FROM users WHERE user_id=?",
+            "FROM users WHERE user_id=? ORDER BY updated_at DESC LIMIT 1",
             (user_id,),
         ).fetchone()
         if row:
@@ -852,6 +952,27 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
                 "updated_at": row[4],
             }
         return None
+
+
+def get_all_uids_by_user_id(user_id: int) -> List[str]:
+    if supabase_enabled():
+        rows = (
+            supabase_client()
+            .table("users")
+            .select("uid")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+        return [row["uid"] for row in rows if "uid" in row]
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT uid FROM users WHERE user_id=? ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
 
 
 def add_message(chat_id: int, role: str, content: str) -> None:
@@ -1157,6 +1278,28 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user = getattr(update, "effective_user", None)
     if user:
+        request_time = int(time.time())
+        remaining = reserve_boost_request(
+            user.id, request_time, BOOST_COOLDOWN_SECONDS
+        )
+        record_boost_request(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            uid=uid,
+            requested_at=request_time,
+            outcome="rate_limited" if remaining else "received",
+            remaining_seconds=remaining,
+            source="caption" if getattr(message, "caption", None) else "command",
+        )
+        if remaining:
+            minutes, seconds = divmod(remaining, 60)
+            wait_text = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+            await message.reply_text(
+                f"\u23F3 You recently sent a /boost request. Please wait {wait_text} "
+                "before trying again."
+            )
+            return
         save_user_uid(user.id, user.username, user.first_name, uid)
         user_tag = f"@{user.username}" if user.username else (
             f"{user.first_name or 'User'} (Telegram ID {user.id})"
@@ -1252,6 +1395,28 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         notice_text,
         parse_mode="HTML",
     )
+
+
+async def boost_caption_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Route boost requests sent as media captions to the standard handler."""
+    message = update.effective_message
+    caption = getattr(message, "caption", None) if message else None
+    if not caption:
+        return
+    if not re.search(r"(?i)(?:/boost\b|\bboost(?:ed)?\b|\bbost\b)", caption):
+        return
+
+    uids = re.findall(r"(?<!\d)\d{6}(?!\d)", caption)
+    if len(uids) != 1:
+        if re.search(r"(?i)/boost\b", caption):
+            context.args = []
+            await boost_command(update, context)
+        return
+
+    context.args = [uids[0]]
+    await boost_command(update, context)
 
 
 async def uid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2660,7 +2825,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Show the iPay welcome menu"),
-        BotCommand("boost", "Mention your six-digit UID for withdrawal guidance"),
+        BotCommand("boost", "Mention your six-digit UID; one request every five minutes"),
     ]
     try:
         await application.bot.set_my_commands(commands)
@@ -2740,6 +2905,7 @@ def build_application(
     application.bot_data["guide"] = guide or create_guide()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler(BOOST_COMMANDS, boost_command))
+    application.add_handler(MessageHandler(filters.CAPTION, boost_caption_handler))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_error_handler(error_handler)
     return application
@@ -2781,8 +2947,13 @@ def main() -> None:
     start_keep_alive_server()
     if supabase_enabled():
         initialize_supabase_storage()
+        log.info("Using Supabase storage")
     else:
         db().close()
+        log.warning(
+            "Supabase is not configured; using local SQLite storage. "
+            "Set SUPABASE_URL and SUPABASE_SECRET_KEY on the bot host."
+        )
     application = build_application(TELEGRAM_BOT_TOKEN)
     log.info("Starting iPay bot polling")
     application.run_polling(

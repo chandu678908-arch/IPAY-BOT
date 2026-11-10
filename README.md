@@ -8,7 +8,9 @@ submitted UID.
 
 The bot does not apply or confirm a withdrawal boost and cannot access iPay's
 payout queue. It provides basic checks and directs users to human support. There
-are no AI replies and no AI provider key is needed.
+are no AI replies and no AI provider key is needed. A user can send one valid
+boost request every five minutes. Boost requests in media captions are accepted
+when the caption includes a six-digit UID and the word `boost`.
 
 ## Windows setup
 
@@ -22,8 +24,7 @@ are no AI replies and no AI provider key is needed.
    .venv\Scripts\python.exe bot.py
    ```
 
-3. Add the bot to your Telegram group. Group privacy can remain enabled:
-   Telegram delivers bot commands in groups. Users can run:
+3. Add the bot to your Telegram group. Users can run:
 
    ```text
    /boost 749488
@@ -32,12 +33,25 @@ are no AI replies and no AI provider key is needed.
    If Telegram requires the bot's username in a group, use
    `/boost@YourBotUsername 749488`.
 
+   For a photo caption in a group with privacy mode enabled, address the
+   command to the bot, for example `/boost@YourBotUsername 749488`. A plain
+   caption such as `749488 boost my withdrawal` is only delivered when the bot
+   is an admin or group privacy is disabled. If you change privacy settings,
+   remove the bot from the group and add it again.
+
 The bot publishes `/start` and `/boost` in the Telegram command menu. Common
 mistyped commands `/bost`, `/boos`, `/boostt`, and `/bot` also run the same
 UID-validated support handler. Other commands and ordinary messages do not
 receive bot replies. Each boost request must contain exactly one six-digit UID.
 Menu navigation edits the welcome message rather than posting a new message
 for each screen.
+
+The Supabase schema includes the persistent boost cooldown table and RPC. If
+you update from an earlier schema, rerun `supabase/schema.sql` in the SQL
+Editor so the cooldown table, request log, and function are created. The
+`users` table keeps the latest UID per Telegram user; each individual attempt
+is recorded in `boost_requests`, including whether it was received or blocked
+by the cooldown and whether it came from a command or media caption.
 
 ## Supabase storage
 
