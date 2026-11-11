@@ -449,16 +449,16 @@ def new_user_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(f"{ICON_BOOK} New User Guide", callback_data="newuser:guide"),
-                InlineKeyboardButton(f"{ICON_GEAR} HOW IPAY WORKS", callback_data="newuser:how_works"),
+                InlineKeyboardButton(f"{ICON_ARROW} Guide", callback_data="newuser:guide"),
+                InlineKeyboardButton(f"{ICON_ARROW} How it works", callback_data="newuser:how_works"),
             ],
             [
-                InlineKeyboardButton(f"{ICON_CART} How to Place Order", callback_data="newuser:place_order"),
-                InlineKeyboardButton(f"{ICON_CLIPBOARD} Security & Alerts", callback_data="newuser:security_alerts"),
+                InlineKeyboardButton(f"{ICON_ARROW} Place order", callback_data="newuser:place_order"),
+                InlineKeyboardButton(f"{ICON_ARROW} Safety", callback_data="newuser:security_alerts"),
             ],
             [
-                InlineKeyboardButton(f"{ICON_GIFT} Referral Rewards", callback_data="newuser:referral"),
-                InlineKeyboardButton(f"{ICON_BULB} Smart Sales Settings", callback_data="newuser:sales_settings"),
+                InlineKeyboardButton(f"{ICON_ARROW} Referrals", callback_data="newuser:referral"),
+                InlineKeyboardButton(f"{ICON_ARROW} Sales settings", callback_data="newuser:sales_settings"),
             ],
             [_back_button()],
         ]
@@ -2800,15 +2800,15 @@ async def _show_security_menu(update: Update) -> None:
 
 
 async def _show_new_user_menu(update: Update) -> None:
-    caption = (
-        f"{ICON_NEW_USER} <b>NEW USER CENTER</b>\n\n"
-        "Welcome to iPAY! Select what you want to learn:"
-    )
     keyboard = new_user_keyboard()
     if not await _replace_callback_image(
-        update, WELCOME_IMAGE_PATH, caption, keyboard, parse_mode="HTML"
+        update, WELCOME_IMAGE_PATH, "", keyboard
     ):
-        await _replace_callback_text(update, caption, keyboard)
+        await _replace_callback_text(
+            update,
+            "Choose a new-user topic below:",
+            keyboard,
+        )
 
 
 async def _send_new_user_guide(update: Update) -> None:

@@ -163,7 +163,17 @@ class BotTests(unittest.TestCase):
             bot.HOW_TO_PLACE_ORDER_IMAGE_PATH,
             bot.GUIDELINES_IMAGE_PATH,
             bot.SUGGESTION_IMAGE_PATH,
+            bot.REFERRAL_IMAGE_PATH,
         )))
+
+    def test_new_user_buttons_use_compact_arrow_labels(self):
+        labels = [
+            button.text
+            for row in bot.new_user_keyboard().inline_keyboard
+            for button in row
+        ]
+        self.assertTrue(all(label.startswith(bot.ICON_ARROW) for label in labels))
+        self.assertLessEqual(max(map(len, labels)), 18)
 
     def test_start_now_button_uses_configured_https_url(self):
         start_url = (
@@ -2315,7 +2325,7 @@ class BotTests(unittest.TestCase):
             update, msg = make_update("menu:new_user")
             asyncio.run(bot.handle_callback(update, context))
             msg.reply_photo.assert_awaited_once()
-            self.assertIn("NEW USER CENTER", msg.reply_photo.await_args.kwargs["caption"])
+            self.assertNotIn("caption", msg.reply_photo.await_args.kwargs)
 
             update, msg = make_update("newuser:guide")
             asyncio.run(bot.handle_callback(update, context))
