@@ -133,7 +133,7 @@ SUGGESTION_IMAGE_PATH = _asset_path(
     os.getenv("SUGGESTION_IMAGE_PATH", "custom_images/security_scammer_reminder.jpg")
 )
 REFERRAL_IMAGE_PATH = _asset_path(
-    os.getenv("REFERRAL_IMAGE_PATH", "custom_images/referral_rewards.jpg")
+    os.getenv("REFERRAL_IMAGE_PATH", "custom_images/referral_rewards.png")
 )
 GUIDE_PDF_PATH = _asset_path(os.getenv("GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"))
 GUIDE_IMAGE_DIR = _asset_path(os.getenv("GUIDE_IMAGE_DIR", "guide_pages"))
@@ -448,18 +448,12 @@ def notice_keyboard() -> InlineKeyboardMarkup:
 def new_user_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(f"{ICON_ARROW} Guide", callback_data="newuser:guide"),
-                InlineKeyboardButton(f"{ICON_ARROW} How it works", callback_data="newuser:how_works"),
-            ],
-            [
-                InlineKeyboardButton(f"{ICON_ARROW} Place order", callback_data="newuser:place_order"),
-                InlineKeyboardButton(f"{ICON_ARROW} Safety", callback_data="newuser:security_alerts"),
-            ],
-            [
-                InlineKeyboardButton(f"{ICON_ARROW} Referrals", callback_data="newuser:referral"),
-                InlineKeyboardButton(f"{ICON_ARROW} Sales settings", callback_data="newuser:sales_settings"),
-            ],
+            [InlineKeyboardButton(f"{ICON_BOOK} New User Guide", callback_data="newuser:guide")],
+            [InlineKeyboardButton(f"{ICON_GEAR} HOW IPAY WORKS", callback_data="newuser:how_works")],
+            [InlineKeyboardButton(f"{ICON_CART} How to Place Order", callback_data="newuser:place_order")],
+            [InlineKeyboardButton(f"{ICON_CLIPBOARD} Security & Alerts", callback_data="newuser:security_alerts")],
+            [InlineKeyboardButton(f"{ICON_GIFT} Referral Rewards", callback_data="newuser:referral")],
+            [InlineKeyboardButton(f"{ICON_BULB} Smart Sales Settings", callback_data="newuser:sales_settings")],
             [_back_button()],
         ]
     )
@@ -2628,7 +2622,9 @@ async def _replace_callback_image(
         return False
     if not image_path.is_file():
         log.warning("Menu image is missing: %s", image_path.name)
-        return await _replace_callback_text(update, caption, keyboard)
+        if caption:
+            return await _replace_callback_text(update, caption, keyboard)
+        return False
 
     cache_key = _image_cache_key(image_path)
     file_id = PHOTO_FILE_IDS.get(cache_key)
@@ -2804,11 +2800,7 @@ async def _show_new_user_menu(update: Update) -> None:
     if not await _replace_callback_image(
         update, WELCOME_IMAGE_PATH, "", keyboard
     ):
-        await _replace_callback_text(
-            update,
-            "Choose a new-user topic below:",
-            keyboard,
-        )
+        await _replace_callback_text(update, "Choose a topic below:", keyboard)
 
 
 async def _send_new_user_guide(update: Update) -> None:

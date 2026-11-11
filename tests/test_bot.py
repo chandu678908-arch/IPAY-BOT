@@ -86,6 +86,9 @@ class BotTests(unittest.TestCase):
         ):
             self.assertEqual(path, bot._asset_path(bot.os.getenv(environment_key, default)))
 
+    def test_referral_banner_asset_exists(self):
+        self.assertTrue(bot.REFERRAL_IMAGE_PATH.is_file())
+
     def test_problem_resolutions_rejects_non_object_json(self):
         resolutions_path = self.root / "problem_resolutions.json"
         resolutions_path.write_text("[]", encoding="utf-8")
@@ -163,17 +166,7 @@ class BotTests(unittest.TestCase):
             bot.HOW_TO_PLACE_ORDER_IMAGE_PATH,
             bot.GUIDELINES_IMAGE_PATH,
             bot.SUGGESTION_IMAGE_PATH,
-            bot.REFERRAL_IMAGE_PATH,
         )))
-
-    def test_new_user_buttons_use_compact_arrow_labels(self):
-        labels = [
-            button.text
-            for row in bot.new_user_keyboard().inline_keyboard
-            for button in row
-        ]
-        self.assertTrue(all(label.startswith(bot.ICON_ARROW) for label in labels))
-        self.assertLessEqual(max(map(len, labels)), 18)
 
     def test_start_now_button_uses_configured_https_url(self):
         start_url = (
@@ -2290,7 +2283,7 @@ class BotTests(unittest.TestCase):
         pdf_path.write_bytes(b"%PDF-1.4\ntest pdf")
         how_works = self.root / "how_ipay_works.jpg"
         place_order = self.root / "how_to_place_order.jpg"
-        referral = self.root / "referral_rewards.jpg"
+        referral = self.root / "referral_rewards.png"
         guidelines = self.root / "smart_guidelines.jpg"
         suggestion = self.root / "security_scammer_reminder.jpg"
         for img in (how_works, place_order, referral, guidelines, suggestion):
@@ -2326,6 +2319,9 @@ class BotTests(unittest.TestCase):
             asyncio.run(bot.handle_callback(update, context))
             msg.reply_photo.assert_awaited_once()
             self.assertNotIn("caption", msg.reply_photo.await_args.kwargs)
+            self.assertTrue(
+                all(len(row) == 1 for row in bot.new_user_keyboard().inline_keyboard)
+            )
 
             update, msg = make_update("newuser:guide")
             asyncio.run(bot.handle_callback(update, context))
@@ -2348,6 +2344,24 @@ class BotTests(unittest.TestCase):
             msg.reply_photo.assert_awaited_once()
             self.assertIn("SMART SALES SETTINGS", msg.reply_photo.await_args.kwargs["caption"])
             self.assertEqual(msg.reply_photo.await_args.kwargs["parse_mode"], "HTML")
+
+    def test_new_user_menu_uses_a_short_fallback_without_its_removed_caption(self):
+        message = SimpleNamespace(
+            reply_photo=AsyncMock(),
+            reply_text=AsyncMock(),
+        )
+        query = SimpleNamespace(
+            message=message,
+            delete_message=AsyncMock(),
+        )
+        with patch.object(bot, "WELCOME_IMAGE_PATH", self.root / "missing.jpg"):
+            asyncio.run(
+                bot._show_new_user_menu(SimpleNamespace(callback_query=query))
+            )
+        self.assertEqual(
+            message.reply_text.await_args.args[0],
+            "Choose a topic below:",
+        )
 
     def test_boost_caption_is_not_double_handled_by_ai_reply(self):
         message = SimpleNamespace(text=None, caption="boost 749488", reply_text=AsyncMock(), message_id=555, chat_id=100)
