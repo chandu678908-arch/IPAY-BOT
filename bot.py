@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from html import escape
+import io
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 from contextlib import closing
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -37,6 +39,13 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from guide import Guide, GuidePage
+from question_intelligence import (
+    QuestionStore,
+    classify_with_ai,
+    report_documents,
+    resolve_timezone,
+    sanitize_for_classification,
+)
 
 load_dotenv()
 logging.basicConfig(
@@ -78,8 +87,15 @@ ICON_UPI_LOCKED = "🚫"
 ICON_ORDER_LOCKED = "🔐"
 ICON_GUIDE = "🧭"
 ICON_WITHDRAWAL = "📥"
+ICON_NEW_USER = "👤"
+ICON_BOOK = "📘"
+ICON_CART = "🛒"
+ICON_CLIPBOARD = "📋"
+ICON_BULB = "💡"
+ICON_GEAR = "⚙️"
 
 # Telegram Premium Custom Emojis (from NewsEmoji and VickyTricks)
+ICON_GIFT = "🎁"
 CE_BOOST = '<tg-emoji emoji-id="6118531988073747281">⚡</tg-emoji>'
 CE_CHECK = '<tg-emoji emoji-id="6115942363312428399">✅</tg-emoji>'
 CE_MONEY = '<tg-emoji emoji-id="6118618471535218924">💰</tg-emoji>'
@@ -104,10 +120,25 @@ SECURITY_IMAGE_PATH = _asset_path(
 ISSUES_IMAGE_PATH = _asset_path(
     os.getenv("ISSUES_IMAGE_PATH", "custom_images/issues_home_compressed.jpg")
 )
-GUIDE_PDF_PATH = Path(os.getenv("GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"))
-GUIDE_IMAGE_DIR = Path(os.getenv("GUIDE_IMAGE_DIR", "guide_pages"))
+HOW_IPAY_WORKS_IMAGE_PATH = _asset_path(
+    os.getenv("HOW_IPAY_WORKS_IMAGE_PATH", "custom_images/how_ipay_works.jpg")
+)
+HOW_TO_PLACE_ORDER_IMAGE_PATH = _asset_path(
+    os.getenv("HOW_TO_PLACE_ORDER_IMAGE_PATH", "custom_images/how_to_place_order.jpg")
+)
+GUIDELINES_IMAGE_PATH = _asset_path(
+    os.getenv("GUIDELINES_IMAGE_PATH", "custom_images/smart_guidelines.jpg")
+)
+SUGGESTION_IMAGE_PATH = _asset_path(
+    os.getenv("SUGGESTION_IMAGE_PATH", "custom_images/security_scammer_reminder.jpg")
+)
+REFERRAL_IMAGE_PATH = _asset_path(
+    os.getenv("REFERRAL_IMAGE_PATH", "custom_images/referral_rewards.jpg")
+)
+GUIDE_PDF_PATH = _asset_path(os.getenv("GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"))
+GUIDE_IMAGE_DIR = _asset_path(os.getenv("GUIDE_IMAGE_DIR", "guide_pages"))
 CUSTOM_IMAGES_DIR = _asset_path(os.getenv("CUSTOM_IMAGES_DIR", "custom_images"))
-KNOWLEDGE_PATH = Path(os.getenv("KNOWLEDGE_PATH", "knowledge_base.md"))
+KNOWLEDGE_PATH = _asset_path(os.getenv("KNOWLEDGE_PATH", "knowledge_base.md"))
 DB_PATH = os.getenv("DB_PATH", "ipay_bot.sqlite3")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_SECRET_KEY = (
@@ -115,6 +146,7 @@ SUPABASE_SECRET_KEY = (
 ).strip()
 RATE_LIMIT_SECONDS = max(0.5, float(os.getenv("RATE_LIMIT_SECONDS", "2")))
 BOOST_COOLDOWN_SECONDS = 5 * 60
+REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
 ADMIN_USER_IDS = {
     int(value.strip())
@@ -230,6 +262,8 @@ def _push_menu_page(update: Update, context, page: str) -> None:
             stack = ["menu:issues"]
         elif page.startswith("wallet:"):
             stack = ["menu:wallets"]
+        elif page.startswith("newuser:"):
+            stack = ["menu:new_user"]
         elif page == "menu:customer_support":
             stack = ["menu:support"]
         else:
@@ -268,6 +302,9 @@ def main_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(f"{ICON_SECURITY} SECURITY", callback_data="menu:security"),
                 InlineKeyboardButton(f"{ICON_MESSAGE} SUPPORT", callback_data="menu:support"),
+            ],
+            [
+                InlineKeyboardButton(f"{ICON_NEW_USER} NEW USER", callback_data="menu:new_user"),
             ],
             [start_button],
         ]
@@ -408,6 +445,35 @@ def notice_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def new_user_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(f"{ICON_BOOK} New User Guide", callback_data="newuser:guide"),
+                InlineKeyboardButton(f"{ICON_GEAR} HOW IPAY WORKS", callback_data="newuser:how_works"),
+            ],
+            [
+                InlineKeyboardButton(f"{ICON_CART} How to Place Order", callback_data="newuser:place_order"),
+                InlineKeyboardButton(f"{ICON_CLIPBOARD} Security & Alerts", callback_data="newuser:security_alerts"),
+            ],
+            [
+                InlineKeyboardButton(f"{ICON_GIFT} Referral Rewards", callback_data="newuser:referral"),
+                InlineKeyboardButton(f"{ICON_BULB} Smart Sales Settings", callback_data="newuser:sales_settings"),
+            ],
+            [_back_button()],
+        ]
+    )
+
+
+def suggestion_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [_support_button()],
+            [_back_button()],
+        ]
+    )
+
+
 CALLBACK_ROUTES = {
     "nav:back",
     "nav:menu",
@@ -418,6 +484,16 @@ CALLBACK_ROUTES = {
     "menu:customer_support",
     "menu:referral",
     "menu:start",
+    "menu:new_user",
+    "newuser:guide",
+    "newuser:how_works",
+    "newuser:place_order",
+    "newuser:security_alerts",
+    "newuser:sales_settings",
+    "newuser:referral",
+    # Keep already-sent keyboards functional after a bot update.
+    "newuser:guidelines",
+    "newuser:suggestion",
     "wallet:payin",
     "wallet:payout",
     "wallet:relink",
@@ -588,7 +664,7 @@ def supabase_client():
 def initialize_supabase_storage() -> None:
     if not supabase_enabled():
         return
-    # Fail early if credentials, the Data API, or any required table is missing.
+    # Fail early if credentials, the Data API, or any required core table is missing.
     client = supabase_client()
     for table, column in (
         ("messages", "id"),
@@ -600,6 +676,27 @@ def initialize_supabase_storage() -> None:
         ("unanswered_questions", "id"),
     ):
         client.table(table).select(column).limit(1).execute()
+
+    for table, column in (
+        ("question_events", "id"),
+        ("problem_clusters", "id"),
+        ("question_cluster_links", "question_id"),
+        ("user_question_history", "user_id"),
+        ("group_question_analytics", "chat_id"),
+        ("admin_notes", "id"),
+        ("question_resolutions", "id"),
+        ("bot_knowledge_gaps", "id"),
+        ("daily_reports", "report_date"),
+        ("bot_activity_logs", "id"),
+    ):
+        try:
+            client.table(table).select(column).limit(1).execute()
+        except Exception as exc:
+            log.warning(
+                "Analytics table %s is unavailable (%s); run supabase/schema.sql to enable full analytics.",
+                table,
+                type(exc).__name__,
+            )
 
 
 def reserve_boost_request(user_id: int, now: int, cooldown_seconds: int) -> int:
@@ -1142,6 +1239,314 @@ def _is_configured_admin(update: Update) -> bool:
     return bool(user and user.id in ADMIN_USER_IDS)
 
 
+def _question_store() -> QuestionStore:
+    store = QuestionStore(DB_PATH, supabase_client() if supabase_enabled() else None)
+    store.ensure_sqlite_schema()
+    return store
+
+
+def _question_metadata(update: Update) -> Dict[str, Any]:
+    message = getattr(update, "effective_message", None)
+    chat = getattr(update, "effective_chat", None)
+    user = getattr(update, "effective_user", None)
+    return {
+        "user_id": getattr(user, "id", None) if user else None,
+        "username": getattr(user, "username", None) if user else None,
+        "first_name": getattr(user, "first_name", None) if user else None,
+        "chat_id": getattr(chat, "id", None) if chat else (getattr(message, "chat_id", 0) if message else 0),
+        "chat_type": getattr(chat, "type", "unknown") if chat else "unknown",
+        "chat_title": getattr(chat, "title", None) if chat else None,
+        "message_id": getattr(message, "message_id", 0) if message else 0,
+        "created_at": int(message.date.timestamp()) if message and getattr(message, "date", None) else int(datetime.now(timezone.utc).timestamp()),
+    }
+
+
+def _optional_ai_client(context: ContextTypes.DEFAULT_TYPE) -> Optional[AsyncOpenAI]:
+    application = getattr(context, "application", None)
+    return getattr(application, "bot_data", {}).get("ai_client") if application else None
+
+
+async def _save_question_event(
+    update: Update, text: str, response: Optional[str], status: str,
+    ai_client: Optional[AsyncOpenAI] = None,
+) -> None:
+    try:
+        store = _question_store()
+        classification = (
+            await classify_with_ai(sanitize_for_classification(text), ai_client)
+            if ai_client is not None else None
+        )
+        await asyncio.to_thread(
+            store.record,
+            **_question_metadata(update),
+            original_text=text,
+            bot_response=response,
+            answer_status=status,
+            classification=classification,
+        )
+    except Exception as exc:
+        log.warning("Question analytics persistence failed (%s)", type(exc).__name__)
+
+
+async def activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Count incoming Telegram messages without storing their content."""
+    message = getattr(update, "message", None)
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat:
+        return
+    try:
+        store = _question_store()
+        await asyncio.to_thread(
+            store.record_activity,
+            chat_id=chat.id,
+            user_id=user.id if user else None,
+            message_id=message.message_id,
+            chat_type=chat.type,
+            created_at=int(message.date.timestamp()) if message.date else int(time.time()),
+        )
+    except Exception as exc:
+        log.warning("Incoming message analytics failed (%s)", type(exc).__name__)
+
+
+async def questions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    filters_map = {}
+    for item in (getattr(context, "args", []) or []):
+        if "=" in item:
+            key, value = item.split("=", 1)
+            if key in {"status", "category", "priority", "chat", "user"}:
+                filters_map[key] = value
+        elif item in {"unanswered", "partially_answered", "answered", "needs_human_review", "resolved", "ignored"}:
+            filters_map["status"] = item
+    try:
+        rows = await asyncio.to_thread(
+            _question_store().list_questions,
+            status=filters_map.get("status"), category=filters_map.get("category"),
+            priority=filters_map.get("priority"),
+            chat_id=int(filters_map["chat"]) if "chat" in filters_map else None,
+            user_id=int(filters_map["user"]) if "user" in filters_map else None,
+            limit=15,
+        )
+    except Exception as exc:
+        log.warning("Question listing failed (%s)", type(exc).__name__)
+        await message.reply_text("Could not load question records. Check the database connection and migration.")
+        return
+    if not rows:
+        await message.reply_text("No matching question records were found.")
+        return
+    lines = ["Recent question records:"]
+    for row in rows:
+        who = f"@{row['username']}" if row.get("username") else f"user {row.get('user_id') or 'unknown'}"
+        lines.append(f"{row['id']} · {row.get('answer_status')} · {row.get('category')} · {who}: {row.get('original_message','')[:170]}")
+    await message.reply_text("\n".join(lines)[:4000])
+
+
+async def qsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    if not args:
+        await message.reply_text("Usage: /qsearch <words to find>")
+        return
+    try:
+        rows = await asyncio.to_thread(_question_store().list_questions, search=" ".join(args), limit=15)
+    except Exception as exc:
+        log.warning("Question search failed (%s)", type(exc).__name__)
+        rows = []
+    lines = [f"Search results ({len(rows)} shown):"]
+    lines.extend(f"{row['id']} · {row.get('answer_status')} · {row.get('category')}: {row.get('original_message','')[:180]}" for row in rows)
+    await message.reply_text("\n".join(lines)[:4000] if rows else "No matching questions found.")
+
+
+async def qstatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    if len(args) != 2:
+        await message.reply_text("Usage: /qstatus <question-id> <unanswered|partially_answered|answered|needs_human_review|resolved|ignored>")
+        return
+    try:
+        changed = await asyncio.to_thread(_question_store().update_status, args[0], args[1], update.effective_user.id)
+    except Exception as exc:
+        log.warning("Question status update failed (%s)", type(exc).__name__)
+        changed = False
+    await message.reply_text("Question status updated." if changed else "Question not found, or the status/database update failed.")
+
+
+async def qnote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    raw = message.text or ""
+    args = raw.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply_text("Usage: /qnote <question-id> <investigation note>")
+        return
+    try:
+        saved = await asyncio.to_thread(_question_store().add_note, args[1], user.id, args[2])
+    except Exception as exc:
+        log.warning("Question note save failed (%s)", type(exc).__name__)
+        saved = False
+    await message.reply_text("Investigation note saved." if saved else "Could not save note; confirm the question ID and database migration.")
+
+
+async def qresolve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = (message.text or "").split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply_text("Usage: /qresolve <question-id> <resolution summary>")
+        return
+    try:
+        saved = await asyncio.to_thread(_question_store().resolve, args[1], user.id, args[2])
+    except Exception as exc:
+        log.warning("Question resolution save failed (%s)", type(exc).__name__)
+        saved = False
+    await message.reply_text("Question marked resolved and resolution recorded." if saved else "Could not resolve that question; confirm the ID and database migration.")
+
+
+async def qshow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    if len(args) != 1:
+        await message.reply_text("Usage: /qshow <question-id>")
+        return
+    try:
+        row = await asyncio.to_thread(_question_store().question_details, args[0])
+    except Exception as exc:
+        log.warning("Question detail read failed (%s)", type(exc).__name__)
+        row = None
+    if not row:
+        await message.reply_text("Question ID not found.")
+        return
+    lines = [
+        f"ID: {row.get('id')}", f"Status: {row.get('answer_status')} · Priority: {row.get('priority')}",
+        f"Category: {row.get('category')} · Assigned admin: {row.get('assigned_admin_id') or 'unassigned'}",
+        f"User: @{row.get('username')} · Telegram ID: {row.get('user_id')}",
+        f"Source: {row.get('chat_type')} · {row.get('chat_title') or row.get('chat_id')}",
+        f"Asked: {row.get('created_at')}", f"Question: {row.get('original_message')}",
+        f"Bot response: {row.get('bot_response') or 'none'}",
+    ]
+    for note in row.get("admin_notes", []):
+        lines.append(f"Admin note ({note.get('admin_user_id')}): {note.get('note')}")
+    for resolution in row.get("resolutions", []):
+        lines.append(f"Resolution: {resolution.get('resolution')}")
+    examples = row.get("related_examples", [])
+    if examples:
+        lines.append("Related reports in this problem cluster:")
+        lines.extend(f"· {item.get('created_at')} — {item.get('original_message','')[:150]}" for item in examples)
+    await message.reply_text("\n".join(lines)[:4000])
+
+
+async def qhistory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    if len(args) != 1 or not args[0].isdigit():
+        await message.reply_text("Usage: /qhistory <Telegram-user-id>")
+        return
+    try:
+        rows = await asyncio.to_thread(_question_store().user_history, int(args[0]), 20)
+    except Exception as exc:
+        log.warning("User question history read failed (%s)", type(exc).__name__)
+        rows = []
+    if not rows:
+        await message.reply_text("No question history found for that user.")
+        return
+    text = "Question history, newest first:\n" + "\n".join(
+        f"{row['id']} · {row.get('created_at')} · {row.get('answer_status')} · {row.get('category')}: {row.get('original_message','')[:140]}"
+        for row in rows
+    )
+    await message.reply_text(text[:4000])
+
+
+async def qassign_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    if len(args) != 2 or not args[1].isdigit():
+        await message.reply_text("Usage: /qassign <question-id> <admin-Telegram-user-id>")
+        return
+    try:
+        assigned = await asyncio.to_thread(_question_store().assign_question, args[0], int(args[1]))
+    except Exception as exc:
+        log.warning("Question assignment failed (%s)", type(exc).__name__)
+        assigned = False
+    await message.reply_text("Question assigned." if assigned else "Question ID not found or assignment failed.")
+
+
+async def dailyreport_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    if not _is_configured_admin(update):
+        await message.reply_text("This command is available only to configured bot administrators.")
+        return
+    args = getattr(context, "args", []) or []
+    try:
+        if args:
+            day = datetime.strptime(args[0], "%Y-%m-%d").date()
+        else:
+            day = datetime.now(resolve_timezone(REPORT_TIMEZONE)).date()
+        timezone_name = args[1] if len(args) > 1 else REPORT_TIMEZONE
+        store = _question_store()
+        report = await asyncio.to_thread(store.daily_report, day, timezone_name)
+        await asyncio.to_thread(store.store_report, report)
+        summary = (
+            f"Daily question report · {report['date']} ({report['timezone']})\n"
+            f"Incoming messages: {report['total_incoming_messages']}\n"
+            f"Questions: {report['total_questions']} · unanswered: {report['unanswered_count']} · "
+            f"partially answered: {report['partially_answered_count']} · resolved: {report['resolved_count']}\n"
+            f"Complaints: {report['complaints']} · feature requests: {report['feature_requests']}\n"
+            f"Unique users: {report['unique_users']} · groups: {report['groups_involved']}\n"
+            "Complete individual question list is attached as JSON and CSV."
+        )
+        await message.reply_text(summary[:4000])
+        for filename, payload in report_documents(report):
+            await message.reply_document(InputFile(io.BytesIO(payload), filename=filename))
+    except ValueError as exc:
+        await message.reply_text(f"Invalid date or timezone: {exc}. Usage: /dailyreport [YYYY-MM-DD] [Timezone]")
+    except Exception as exc:
+        log.warning("Daily report generation/delivery failed (%s)", type(exc).__name__)
+        await message.reply_text("Could not generate the report. Confirm the question analytics migration has run and check the bot logs.")
+
+
 def _enabled_languages() -> List[str]:
     configured = get_setting("enabled_languages")
     if configured is None:
@@ -1299,6 +1704,12 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"\u23F3 You recently sent a /boost request. Please wait {wait_text} "
                 "before trying again."
             )
+            await _save_question_event(
+                update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}",
+                "Boost request rate limited by the five-minute cooldown.",
+                "partially_answered",
+                _optional_ai_client(context),
+            )
             return
         save_user_uid(user.id, user.username, user.first_name, uid)
         user_tag = f"@{user.username}" if user.username else (
@@ -1395,6 +1806,31 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         notice_text,
         parse_mode="HTML",
     )
+    await _save_question_event(
+        update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}", notice_text, "partially_answered",
+        _optional_ai_client(context),
+    )
+
+
+def _mark_handled_boost_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    message: Any,
+) -> None:
+    application = getattr(context, "application", None)
+    bot_data = getattr(application, "bot_data", None)
+    if not isinstance(bot_data, dict):
+        return
+    chat = getattr(update, "effective_chat", None)
+    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    message_id = getattr(message, "message_id", None)
+    if chat_id is None or message_id is None:
+        return
+    handled = bot_data.setdefault("handled_boost_messages", {})
+    now = time.monotonic()
+    handled = {k: ts for k, ts in handled.items() if now - ts < 180}
+    handled[(chat_id, message_id)] = now
+    bot_data["handled_boost_messages"] = handled
 
 
 async def boost_caption_handler(
@@ -1405,16 +1841,21 @@ async def boost_caption_handler(
     caption = getattr(message, "caption", None) if message else None
     if not caption:
         return
-    if not re.search(r"(?i)(?:/boost\b|\bboost(?:ed)?\b|\bbost\b)", caption):
+    if not re.search(
+        r"(?i)(?:/(?:boost|bost|boos|boostt|bot)\b|\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\b)",
+        caption,
+    ):
         return
 
     uids = re.findall(r"(?<!\d)\d{6}(?!\d)", caption)
     if len(uids) != 1:
-        if re.search(r"(?i)/boost\b", caption):
+        if re.search(r"(?i)/(?:boost|bost|boos|boostt|bot)\b", caption):
+            _mark_handled_boost_message(context, update, message)
             context.args = []
             await boost_command(update, context)
         return
 
+    _mark_handled_boost_message(context, update, message)
     context.args = [uids[0]]
     await boost_command(update, context)
 
@@ -1996,7 +2437,7 @@ async def _send_referral(message) -> None:
         return
     await message.reply_text(
         "The supplied guide describes ₹100 for the inviter and ₹50 for the invited "
-        "friend after registration through a referral link/code and 10 qualifying "
+        "friend after registration through a referral link/code and 15 qualifying "
         "orders on the same day. Current availability, qualifying-order rules, and "
         "the exact expiry calculation are not confirmed. Ask support to confirm "
         "the live offer. This bot cannot generate referral links or check referral status.",
@@ -2005,9 +2446,7 @@ async def _send_referral(message) -> None:
 
 
 def _load_problem_resolutions() -> Dict[str, Dict[str, Any]]:
-    path = Path(os.getenv("PROBLEM_RESOLUTIONS_PATH", "problem_resolutions.json"))
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parent / path
+    path = _asset_path(os.getenv("PROBLEM_RESOLUTIONS_PATH", "problem_resolutions.json"))
     if not path.is_file():
         log.warning("Problem resolutions file not found at %s; using built-in fallbacks", path)
         return {}
@@ -2017,10 +2456,16 @@ def _load_problem_resolutions() -> Dict[str, Dict[str, Any]]:
     except (OSError, ValueError) as exc:
         log.error("Could not parse problem resolutions file (%s): %s", type(exc).__name__, exc)
         return {}
+    if not isinstance(data, dict):
+        log.error("Problem resolutions file must contain a JSON object")
+        return {}
     return {
         key: value
         for key, value in data.items()
-        if not key.startswith("_") and isinstance(value, dict)
+        if isinstance(key, str)
+        and not key.startswith("_")
+        and isinstance(value, dict)
+        and isinstance(value.get("resolution"), str)
     }
 
 
@@ -2175,6 +2620,7 @@ async def _replace_callback_image(
     image_path: Path,
     caption: str,
     keyboard: InlineKeyboardMarkup,
+    parse_mode: Optional[str] = None,
 ) -> bool:
     query = update.callback_query
     message = query.message if query else None
@@ -2192,6 +2638,8 @@ async def _replace_callback_image(
             kwargs: Dict[str, Any] = {"reply_markup": keyboard}
             if caption:
                 kwargs["caption"] = caption[:1024]
+                if parse_mode:
+                    kwargs["parse_mode"] = parse_mode
             return kwargs
 
         try:
@@ -2250,13 +2698,14 @@ async def _replace_callback_text(
     update: Update,
     text: str,
     keyboard: InlineKeyboardMarkup,
+    parse_mode: str = "HTML",
 ) -> bool:
     query = update.callback_query
     message = query.message if query else None
     if not query or not message:
         return False
     try:
-        await message.reply_text(text, reply_markup=keyboard)
+        await message.reply_text(text, reply_markup=keyboard, parse_mode=parse_mode)
     except TelegramError as exc:
         log.error("Could not send replacement menu text (%s): %s", type(exc).__name__, exc)
         return False
@@ -2328,7 +2777,11 @@ async def _show_issues_menu(update: Update) -> None:
         caption,
         keyboard,
     ):
-        log.error("Could not display the Issues menu")
+        await _present_callback(
+            update,
+            "The Issues image could not be sent. Choose an issue below:",
+            keyboard,
+        )
 
 
 async def _show_security_menu(update: Update) -> None:
@@ -2344,6 +2797,203 @@ async def _show_security_menu(update: Update) -> None:
             "Security image unavailable.",
             keyboard,
         )
+
+
+async def _show_new_user_menu(update: Update) -> None:
+    caption = (
+        f"{ICON_NEW_USER} <b>NEW USER CENTER</b>\n\n"
+        "Welcome to iPAY! Select what you want to learn:"
+    )
+    keyboard = new_user_keyboard()
+    if not await _replace_callback_image(
+        update, WELCOME_IMAGE_PATH, caption, keyboard, parse_mode="HTML"
+    ):
+        await _replace_callback_text(update, caption, keyboard)
+
+
+async def _send_new_user_guide(update: Update) -> None:
+    query = update.callback_query
+    message = query.message if query else None
+    if not message:
+        return
+    try:
+        with GUIDE_PDF_PATH.open("rb") as pdf_file:
+            await message.reply_document(
+                document=pdf_file,
+                filename=GUIDE_PDF_PATH.name,
+                caption=f"{ICON_BOOK} iPay New User Guide",
+            )
+    except OSError as exc:
+        log.error(
+            "Could not open user guide PDF at %s (%s): %s",
+            GUIDE_PDF_PATH, type(exc).__name__, exc,
+        )
+        await message.reply_text(
+            "The iPay User Guide PDF is currently unavailable. Please contact support.",
+            reply_markup=new_user_keyboard(),
+        )
+    except TelegramError as exc:
+        log.error("Could not send user guide PDF (%s): %s", type(exc).__name__, exc)
+        await message.reply_text(
+            "The iPay User Guide could not be sent. Please try again later.",
+            reply_markup=new_user_keyboard(),
+        )
+
+
+async def _send_how_ipay_works(update: Update) -> None:
+    caption = (
+        "🧾 <b>WELCOME TO iPAY</b>\n\n"
+        "➡️ <b>HOW IT WORKS</b>\n\n"
+        "▪️ Register your iPAY account.\n"
+        "▪️ Link your supported wallets.\n"
+        "▪️ Complete eligible orders.\n"
+        "▪️ Earn up to 4% commission.\n"
+        "▪️ Get extra ₹5 on selected activity orders.\n\n"
+        "🎯 Complete Orders • Earn Rewards!\n\n"
+        "◆ START YOUR iPAY JOURNEY!"
+    )
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update,
+        HOW_IPAY_WORKS_IMAGE_PATH,
+        caption,
+        keyboard,
+        parse_mode="HTML",
+    ):
+        await _replace_callback_text(
+            update,
+            caption,
+            keyboard,
+        )
+
+
+async def _send_how_to_place_order(update: Update) -> None:
+    caption = (
+        "🧾 <b>iPAY – HOW TO PLACE AN ORDER</b>\n\n"
+        "➡️ <b>FOLLOW THESE STEPS</b>\n\n"
+        "▪️ Step 1: Open iPAY and click on Deposit.\n"
+        "▪️ Step 2: Choose your order amount and click Buy.\n"
+        "▪️ Step 3: Select your supported wallet and confirm.\n"
+        "▪️ Step 4: Click on Go to Transfer.\n"
+        "▪️ Step 5: Verify bank details and complete payment.\n"
+        "▪️ Step 6: Take a payment screenshot and copy the UTR.\n"
+        "▪️ Step 7: Return to iPAY and click Paid.\n"
+        "▪️ Step 8: Enter the UTR, upload screenshot and submit.\n"
+        "▪️ Step 9: Wait for your order confirmation.\n\n"
+        "🎯 FOLLOW • VERIFY • COMPLETE!\n\n"
+        "◆ SIMPLE • SECURE • TRUSTED"
+    )
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update,
+        HOW_TO_PLACE_ORDER_IMAGE_PATH,
+        caption,
+        keyboard,
+        parse_mode="HTML",
+    ):
+        await _replace_callback_text(
+            update,
+            caption,
+            keyboard,
+        )
+
+
+async def _send_guidelines(update: Update) -> None:
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update,
+        GUIDELINES_IMAGE_PATH,
+        "",
+        keyboard,
+    ):
+        await _replace_callback_text(
+            update,
+            f"{ICON_CLIPBOARD} iPAY Guidelines\n\nImage is currently unavailable.",
+            keyboard,
+        )
+
+
+async def _send_suggestion(update: Update) -> None:
+    caption = (
+        f"{ICON_BULB} <b>SUGGESTION &amp; FEEDBACK</b>\n\n"
+        "We value your feedback! If you have any suggestions to improve iPAY, "
+        "please share them with our support team.\n\n"
+        f"📩 Contact {SUPPORT_1} or {SUPPORT_2} to submit your suggestion.\n"
+        "🛡️ Stay safe: Official iPAY support will never ask for your OTP, PIN, or password."
+    )
+    keyboard = suggestion_keyboard()
+    if not await _replace_callback_image(
+        update,
+        SUGGESTION_IMAGE_PATH,
+        caption,
+        keyboard,
+        parse_mode="HTML",
+    ):
+        await _replace_callback_text(update, caption, keyboard)
+
+
+async def _send_security_alerts(update: Update) -> None:
+    caption = (
+        "🧾 <b>iPAY – SECURITY ALERT</b>\n\n"
+        "➡️ <b>IMPORTANT CHECKS</b>\n\n"
+        "▪️ Never share your OTP, PIN, or password.\n"
+        "▪️ iPAY will never ask for personal money transfers.\n"
+        "▪️ Beware of fake customer support calls.\n"
+        "▪️ Never pay to unlock or unfreeze your account.\n\n"
+        "🎯 <b>WHAT TO DO</b>\n\n"
+        "▪️ Verify requests through official iPAY support.\n"
+        "▪️ Avoid suspicious calls and messages.\n"
+        "▪️ Report any scam attempts immediately.\n\n"
+        "◆ STAY ALERT • STAY SAFE!\n\n— iPAY TEAM"
+    )
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update, SUGGESTION_IMAGE_PATH, caption, keyboard, parse_mode="HTML"
+    ):
+        await _replace_callback_text(update, caption, keyboard)
+
+
+async def _send_smart_sales_settings(update: Update) -> None:
+    caption = (
+        "🧾 <b>iPAY – SMART SALES SETTINGS</b>\n\n"
+        "➡️ <b>IMPORTANT CHECKS</b>\n\n"
+        "▪️ Turn OFF sales when not required.\n"
+        "▪️ Keep sales ON only when processing orders.\n"
+        "▪️ Keep your wallets ready when needed.\n\n"
+        "🎯 <b>WHAT TO DO</b>\n\n"
+        "▪️ Manage your sales activity.\n"
+        "▪️ Enable sales whenever required.\n"
+        "▪️ Disable sales when not in use.\n"
+        "▪️ Keep your account settings updated.\n\n"
+        "◆ MANAGE • CONTROL • STAY UPDATED!"
+    )
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update, GUIDELINES_IMAGE_PATH, caption, keyboard, parse_mode="HTML"
+    ):
+        await _replace_callback_text(update, caption, keyboard)
+
+
+async def _send_newuser_referral(update: Update) -> None:
+    caption = (
+        "🧾 <b>iPAY – INVITE FRIENDS &amp; EARN REWARDS</b>\n\n"
+        "➡️ <b>HOW IT WORKS</b>\n\n"
+        "▪️ Share your invitation link or code.\n"
+        "▪️ Your friend registers with iPAY.\n"
+        "▪️ Complete 15 orders on the same day.\n"
+        "▪️ You get ₹100 and your friend gets ₹50.\n"
+        "▪️ Rewards are given after all requirements are met.\n\n"
+        "🎯 <b>WHAT TO DO</b>\n\n"
+        "▪️ Invite your friends.\n"
+        "▪️ Help them complete the required orders.\n"
+        "▪️ Claim your referral rewards.\n\n"
+        "◆ INVITE • COMPLETE • EARN!"
+    )
+    keyboard = InlineKeyboardMarkup([[_back_button()]])
+    if not await _replace_callback_image(
+        update, REFERRAL_IMAGE_PATH, caption, keyboard, parse_mode="HTML"
+    ):
+        await _replace_callback_text(update, caption, keyboard)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2389,6 +3039,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "The iPay User Guide could not be sent. Please try again later."
             )
         return
+    if action == "newuser:guide":
+        await _send_new_user_guide(update)
+        return
     guide: Guide = context.application.bot_data["guide"]
 
     if action == "nav:back":
@@ -2428,11 +3081,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _present_callback(
             update,
             "The guide describes ₹100 for the inviter and ₹50 for the invited friend "
-            "after registration through a referral link/code and 10 qualifying "
+            "after registration through a referral link/code and 15 qualifying "
             "orders on the same day. Current availability and exact conditions "
             "need confirmation with support.",
             referral_keyboard(),
         )
+        return
+    if action == "menu:new_user":
+        await _show_new_user_menu(update)
+        return
+    if action == "newuser:how_works":
+        await _send_how_ipay_works(update)
+        return
+    if action == "newuser:place_order":
+        await _send_how_to_place_order(update)
+        return
+    if action == "newuser:referral":
+        await _send_newuser_referral(update)
+        return
+    if action in {"newuser:security_alerts", "newuser:guidelines"}:
+        await _send_security_alerts(update)
+        return
+    if action in {"newuser:sales_settings", "newuser:suggestion"}:
+        await _send_smart_sales_settings(update)
         return
     if action == "menu:start":
         if START_URL and _url_is_safe(START_URL):
@@ -2671,14 +3342,23 @@ def _ai_unavailable_answer(question: str, guide: Guide) -> str:
 async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
-    if not message or not message.text or not chat:
+    message_text = (getattr(message, "text", None) or getattr(message, "caption", None)) if message else None
+    if not message or not message_text or not chat:
         return
 
     is_group = chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
     if chat.type != ChatType.PRIVATE and not is_group:
         return
 
-    text = message.text.strip()
+    application = getattr(context, "application", None)
+    bot_data = getattr(application, "bot_data", None)
+    message_id = getattr(message, "message_id", None)
+    if isinstance(bot_data, dict) and message_id is not None:
+        handled_boosts = bot_data.get("handled_boost_messages") or {}
+        if (chat.id, message_id) in handled_boosts:
+            return
+
+    text = message_text.strip()
 
     # Handle Boost keyword triggers (with typo tolerance: bost, boost, b00st, etc.)
     boost_match = re.search(
@@ -2797,7 +3477,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pre_retrieved_pages,
         )
         if chat_action_task:
-            await chat_action_task
+            try:
+                await chat_action_task
+            except Exception as exc:
+                log.debug("Typing indicator failed (%s)", type(exc).__name__)
         add_message(conversation_id, "user", question)
         add_message(conversation_id, "assistant", answer)
         answer_with_support = (
@@ -2807,6 +3490,11 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if pages and pages[0].image_path:
             await _send_guide_page(message, pages[0])
         await message.reply_text(answer_with_support)
+        has_approved_source = bool(pages or _matching_custom_faqs(question))
+        answer_status = "answered" if has_approved_source else "partially_answered"
+        if any(term in answer.casefold() for term in ("couldn't find", "could not find", "contact support", "not sure")) and not has_approved_source:
+            answer_status = "needs_human_review"
+        await _save_question_event(update, question, answer_with_support, answer_status, ai_client)
     except Exception as exc:
         if chat_action_task and not chat_action_task.done():
             chat_action_task.cancel()
@@ -2820,6 +3508,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             fallback,
             reply_markup=support_options_keyboard(),
         )
+        await _save_question_event(update, question, fallback, "needs_human_review", ai_client)
 
 
 async def _post_init(application: Application) -> None:
@@ -2903,10 +3592,29 @@ def build_application(
         .build()
     )
     application.bot_data["guide"] = guide or create_guide()
+    if os.getenv("OPENAI_API_KEY", "").strip():
+        application.bot_data["ai_client"] = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY", "").strip(), timeout=45.0
+        )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler(BOOST_COMMANDS, boost_command))
     application.add_handler(MessageHandler(filters.CAPTION, boost_caption_handler))
+    application.add_handler(CommandHandler("questions", questions_command))
+    application.add_handler(CommandHandler("qsearch", qsearch_command))
+    application.add_handler(CommandHandler("qstatus", qstatus_command))
+    application.add_handler(CommandHandler("qnote", qnote_command))
+    application.add_handler(CommandHandler("qresolve", qresolve_command))
+    application.add_handler(CommandHandler("qshow", qshow_command))
+    application.add_handler(CommandHandler("qhistory", qhistory_command))
+    application.add_handler(CommandHandler("qassign", qassign_command))
+    application.add_handler(CommandHandler("dailyreport", dailyreport_command))
+    application.add_handler(CommandHandler("unanswered", unanswered_command))
+    application.add_handler(
+        MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.CAPTION, ai_reply),
+        group=1,
+    )
     application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(MessageHandler(filters.ALL, activity_handler), group=-1)
     application.add_error_handler(error_handler)
     return application
 

@@ -1,0 +1,2 @@
+[functions.daily-question-report]
+verify_jwt = false

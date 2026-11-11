@@ -1,4 +1,6 @@
 .env
+supabase/functions/.env
+supabase/functions/**/.env
 *.sqlite3
 __pycache__/
 .venv/

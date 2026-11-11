@@ -1,10 +1,12 @@
 import asyncio
+import shutil
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import uuid
 
 import pymupdf
 from telegram.error import BadRequest, Conflict
@@ -17,8 +19,8 @@ from run_bot_watch import watched_files
 
 class BotTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
+        self.root = Path(__file__).resolve().parent / f".bot-test-{uuid.uuid4().hex}"
+        self.root.mkdir()
         self.supabase_url_patch = patch.object(bot, "SUPABASE_URL", "")
         self.supabase_key_patch = patch.object(bot, "SUPABASE_SECRET_KEY", "")
         self.supabase_url_patch.start()
@@ -34,7 +36,7 @@ class BotTests(unittest.TestCase):
     def tearDown(self):
         self.supabase_url_patch.stop()
         self.supabase_key_patch.stop()
-        self.temp_dir.cleanup()
+        shutil.rmtree(self.root)
 
     def test_http_request_logs_do_not_emit_tokens_at_info_level(self):
         self.assertGreaterEqual(
@@ -76,6 +78,40 @@ class BotTests(unittest.TestCase):
             self.root / "images",
         )
 
+    def test_default_guide_paths_are_anchored_to_the_project(self):
+        for path, environment_key, default in (
+            (bot.GUIDE_PDF_PATH, "GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"),
+            (bot.GUIDE_IMAGE_DIR, "GUIDE_IMAGE_DIR", "guide_pages"),
+            (bot.KNOWLEDGE_PATH, "KNOWLEDGE_PATH", "knowledge_base.md"),
+        ):
+            self.assertEqual(path, bot._asset_path(bot.os.getenv(environment_key, default)))
+
+    def test_problem_resolutions_rejects_non_object_json(self):
+        resolutions_path = self.root / "problem_resolutions.json"
+        resolutions_path.write_text("[]", encoding="utf-8")
+        with patch.dict("os.environ", {"PROBLEM_RESOLUTIONS_PATH": str(resolutions_path)}):
+            self.assertEqual(bot._load_problem_resolutions(), {})
+
+    def test_activity_handler_ignores_callback_query_messages(self):
+        store = SimpleNamespace(record_activity=Mock())
+        callback_message = SimpleNamespace(message_id=55)
+        update = SimpleNamespace(
+            message=None,
+            effective_message=callback_message,
+            effective_chat=SimpleNamespace(id=-1001, type=bot.ChatType.SUPERGROUP),
+            effective_user=SimpleNamespace(id=12),
+        )
+        context = SimpleNamespace()
+        with patch.object(bot, "_question_store", return_value=store):
+            asyncio.run(bot.activity_handler(update, context))
+        store.record_activity.assert_not_called()
+
+        update.message = SimpleNamespace(message_id=56, date=None)
+        with patch.object(bot, "_question_store", return_value=store):
+            asyncio.run(bot.activity_handler(update, context))
+        store.record_activity.assert_called_once()
+        self.assertEqual(store.record_activity.call_args.kwargs["message_id"], 56)
+
     def test_every_callback_button_has_a_handler(self):
         with patch.object(bot, "START_URL", ""):
             keyboards = [
@@ -87,6 +123,8 @@ class BotTests(unittest.TestCase):
                 bot.referral_keyboard(),
                 bot.start_keyboard(),
                 bot.notice_keyboard(),
+                bot.new_user_keyboard(),
+                bot.suggestion_keyboard(),
             ]
         callback_actions = {
             button.callback_data
@@ -99,7 +137,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(callback_actions - bot.CALLBACK_ROUTES, set())
         self.assertTrue(
             {"menu:wallets", "menu:issues", "menu:security", "menu:support",
-             "menu:customer_support", "menu:start", "nav:menu"} <= callback_actions
+             "menu:customer_support", "menu:start", "menu:new_user", "nav:menu"} <= callback_actions
         )
         self.assertNotIn(
             "menu:referral",
@@ -118,6 +156,14 @@ class BotTests(unittest.TestCase):
             len(bot.main_keyboard().inline_keyboard[-1]),
             1,
         )
+
+    def test_new_user_images_exist(self):
+        self.assertTrue(all(path.is_file() for path in (
+            bot.HOW_IPAY_WORKS_IMAGE_PATH,
+            bot.HOW_TO_PLACE_ORDER_IMAGE_PATH,
+            bot.GUIDELINES_IMAGE_PATH,
+            bot.SUGGESTION_IMAGE_PATH,
+        )))
 
     def test_start_now_button_uses_configured_https_url(self):
         start_url = (
@@ -296,7 +342,7 @@ class BotTests(unittest.TestCase):
             [button.callback_data for row in buttons for button in row],
         )
 
-    def test_only_start_and_boost_commands_are_registered(self):
+    def test_public_and_admin_commands_are_registered(self):
         application = bot.build_application(
             "dummy-telegram-token-for-tests",
             guide=self.make_guide(),
@@ -312,7 +358,10 @@ class BotTests(unittest.TestCase):
             if isinstance(handler, CommandHandler)
             for command in handler.commands
         }
-        self.assertEqual(commands, {"start", *bot.BOOST_COMMANDS})
+        self.assertEqual(
+            commands,
+            {"start", *bot.BOOST_COMMANDS, "questions", "qsearch", "qstatus", "qnote", "qresolve", "qshow", "qhistory", "qassign", "dailyreport", "unanswered"},
+        )
         boost_handlers = [
             handler
             for handler in application.handlers[0]
@@ -328,7 +377,9 @@ class BotTests(unittest.TestCase):
         ]
         self.assertEqual(len(caption_handlers), 1)
         self.assertEqual(caption_handlers[0].callback, bot.boost_caption_handler)
-        self.assertEqual(len(application.handlers[0]), 4)
+        self.assertEqual(len(application.handlers[0]), 14)
+        self.assertEqual(application.handlers[1][0].callback, bot.ai_reply)
+        self.assertEqual(application.handlers[-1][0].callback, bot.activity_handler)
 
     def test_only_start_and_boost_are_published_to_telegram(self):
         application = SimpleNamespace(
@@ -354,6 +405,10 @@ class BotTests(unittest.TestCase):
             "upi_locked.jpg",
             "order_locked.jpg",
             "reward_quota.jpg",
+            "how_ipay_works.jpg",
+            "how_to_place_order.jpg",
+            "smart_guidelines.jpg",
+            "security_scammer_reminder.jpg",
         ):
             (custom_images / filename).write_bytes(b"test image")
         context = SimpleNamespace(
@@ -364,12 +419,17 @@ class BotTests(unittest.TestCase):
                 self.subTest(action=action),
                 patch.object(bot, "START_URL", ""),
                 patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images),
+                patch.object(bot, "HOW_IPAY_WORKS_IMAGE_PATH", custom_images / "how_ipay_works.jpg"),
+                patch.object(bot, "HOW_TO_PLACE_ORDER_IMAGE_PATH", custom_images / "how_to_place_order.jpg"),
+                patch.object(bot, "GUIDELINES_IMAGE_PATH", custom_images / "smart_guidelines.jpg"),
+                patch.object(bot, "SUGGESTION_IMAGE_PATH", custom_images / "security_scammer_reminder.jpg"),
             ):
                 message = SimpleNamespace(
                     photo=[],
                     reply_text=AsyncMock(),
                     reply_photo=AsyncMock(),
                     reply_document=AsyncMock(),
+                    reply_media_group=AsyncMock(),
                 )
                 query = SimpleNamespace(
                     data=action,
@@ -391,6 +451,7 @@ class BotTests(unittest.TestCase):
                     or message.reply_photo.await_count
                     or message.reply_document.await_count
                     or message.reply_text.await_count
+                    or message.reply_media_group.await_count
                 )
 
     def test_every_command_handler_returns_a_response(self):
@@ -893,6 +954,27 @@ class BotTests(unittest.TestCase):
                 for row in markup.inline_keyboard
                 for button in row
             },
+        )
+
+    def test_issues_callback_falls_back_to_text_when_image_upload_fails(self):
+        image_path = self.root / "issues.jpg"
+        image_path.write_bytes(b"test image")
+        message = SimpleNamespace(
+            reply_photo=AsyncMock(side_effect=BadRequest("image upload failed")),
+            reply_text=AsyncMock(),
+        )
+        query = SimpleNamespace(
+            message=message,
+            delete_message=AsyncMock(),
+        )
+        with patch.object(bot, "ISSUES_IMAGE_PATH", image_path):
+            asyncio.run(
+                bot._show_issues_menu(SimpleNamespace(callback_query=query))
+            )
+        message.reply_text.assert_awaited_once()
+        self.assertIn(
+            "Issues image could not be sent",
+            message.reply_text.await_args.args[0],
         )
 
     def test_customer_support_keeps_current_support_image(self):
@@ -2191,6 +2273,91 @@ class BotTests(unittest.TestCase):
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
         self.assertIn("Your UID was received for the withdrawal boost", response)
         self.assertNotIn("Contact support:", response)
+
+    def test_new_user_center_buttons_deliver_expected_content(self):
+        guide = self.make_guide()
+        pdf_path = self.root / "I_PAY_User_Guide.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\ntest pdf")
+        how_works = self.root / "how_ipay_works.jpg"
+        place_order = self.root / "how_to_place_order.jpg"
+        referral = self.root / "referral_rewards.jpg"
+        guidelines = self.root / "smart_guidelines.jpg"
+        suggestion = self.root / "security_scammer_reminder.jpg"
+        for img in (how_works, place_order, referral, guidelines, suggestion):
+            img.write_bytes(b"img")
+
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={"guide": guide}))
+
+        def make_update(action: str):
+            msg = SimpleNamespace(
+                chat_id=100,
+                photo=[],
+                reply_text=AsyncMock(),
+                reply_photo=AsyncMock(),
+                reply_document=AsyncMock(),
+            )
+            q = SimpleNamespace(
+                data=action,
+                message=msg,
+                answer=AsyncMock(),
+                delete_message=AsyncMock(),
+            )
+            return SimpleNamespace(callback_query=q, effective_chat=SimpleNamespace(id=100), effective_user=SimpleNamespace(id=1)), msg
+
+        with (
+            patch.object(bot, "GUIDE_PDF_PATH", pdf_path),
+            patch.object(bot, "HOW_IPAY_WORKS_IMAGE_PATH", how_works),
+            patch.object(bot, "HOW_TO_PLACE_ORDER_IMAGE_PATH", place_order),
+            patch.object(bot, "REFERRAL_IMAGE_PATH", referral),
+            patch.object(bot, "GUIDELINES_IMAGE_PATH", guidelines),
+            patch.object(bot, "SUGGESTION_IMAGE_PATH", suggestion),
+        ):
+            update, msg = make_update("menu:new_user")
+            asyncio.run(bot.handle_callback(update, context))
+            msg.reply_photo.assert_awaited_once()
+            self.assertIn("NEW USER CENTER", msg.reply_photo.await_args.kwargs["caption"])
+
+            update, msg = make_update("newuser:guide")
+            asyncio.run(bot.handle_callback(update, context))
+            self.assertEqual(msg.reply_document.await_args.kwargs["filename"], "I_PAY_User_Guide.pdf")
+
+            for action, expected in (
+                ("newuser:how_works", "Register your iPAY account."),
+                ("newuser:place_order", "Step 9: Wait for your order confirmation."),
+                ("newuser:referral", "Complete 15 orders on the same day."),
+                ("newuser:security_alerts", "Never share your OTP, PIN, or password."),
+                ("newuser:sales_settings", "Turn OFF sales when not required."),
+            ):
+                update, msg = make_update(action)
+                asyncio.run(bot.handle_callback(update, context))
+                msg.reply_photo.assert_awaited_once()
+                self.assertIn(expected, msg.reply_photo.await_args.kwargs["caption"])
+
+            update, msg = make_update("newuser:suggestion")
+            asyncio.run(bot.handle_callback(update, context))
+            msg.reply_photo.assert_awaited_once()
+            self.assertIn("SMART SALES SETTINGS", msg.reply_photo.await_args.kwargs["caption"])
+            self.assertEqual(msg.reply_photo.await_args.kwargs["parse_mode"], "HTML")
+
+    def test_boost_caption_is_not_double_handled_by_ai_reply(self):
+        message = SimpleNamespace(text=None, caption="boost 749488", reply_text=AsyncMock(), message_id=555, chat_id=100)
+        chat = SimpleNamespace(id=100, type="private")
+        user = SimpleNamespace(id=445, username="trader", first_name="Trader")
+        update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=user)
+        app = SimpleNamespace(bot_data={"guide": MagicMock()})
+        context = SimpleNamespace(application=app)
+        with (
+            patch.object(bot, "save_user_uid"),
+            patch.object(bot, "reserve_boost_request", return_value=0),
+            patch.object(bot, "record_boost_request"),
+        ):
+            asyncio.run(bot.boost_caption_handler(update, context))
+            asyncio.run(bot.ai_reply(update, context))
+        message.reply_text.assert_awaited_once()
+
+    def test_resolve_timezone_supports_asia_kolkata(self):
+        tz = bot.resolve_timezone("Asia/Kolkata")
+        self.assertIsNotNone(tz)
 
 
 if __name__ == "__main__":

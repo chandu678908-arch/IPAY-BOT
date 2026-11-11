@@ -1,67 +1,83 @@
-# iPay Boost Support Bot
+# iPay Telegram Support Bot
 
-A Telegram bot with a `/start` welcome screen and `/boost <6-digit UID>` support
-command. Welcome-screen buttons update the existing bot message in place. The
-bot works in private chats and groups. In a group, each boost response replies
-to the user who issued the command and includes that user's Telegram name and
-submitted UID.
+This repository contains the existing `python-telegram-bot` polling bot, iPay guide/FAQ replies, `/boost` flow, and an additive question-intelligence and reporting system. The bot uses Supabase when `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are set, and SQLite for local development otherwise. OpenAI is optional: when `OPENAI_API_KEY` is set, it powers conversational answers and multilingual question classification. Classification falls back to deterministic local rules if the API is unset or unavailable.
 
-The bot does not apply or confirm a withdrawal boost and cannot access iPay's
-payout queue. It provides basic checks and directs users to human support. There
-are no AI replies and no AI provider key is needed. A user can send one valid
-boost request every five minutes. Boost requests in media captions are accepted
-when the caption includes a six-digit UID and the word `boost`.
+The bot does not perform, accelerate, or verify withdrawals. Boost replies are acknowledgments only. Question analytics redact six-digit UIDs and skip storing messages that match sensitive-credential checks. Incoming-message activity logs contain message metadata only, not message text.
 
-## Windows setup
+## Setup
 
-1. Copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN` to your bot token.
-   Set `SUPPORT_1` and `SUPPORT_2` to the support usernames you want shown.
-2. Install dependencies and start the bot from the project directory:
+1. Copy `.env.example` to `.env`. Configure `TELEGRAM_BOT_TOKEN`, Supabase credentials, and `ADMIN_USER_IDS` (comma-separated Telegram numeric IDs). `OPENAI_API_KEY` is optional.
+2. In Supabase SQL Editor, run the complete [`supabase/schema.sql`](supabase/schema.sql). It includes the existing tables plus the additive question-intelligence objects. The same additive objects are available in [`supabase/migrations/20261111_question_intelligence.sql`](supabase/migrations/20261111_question_intelligence.sql).
+3. Install dependencies and run the bot:
 
-   ```cmd
-   python -m venv .venv
-   .venv\Scripts\python.exe -m pip install -r requirements.txt
-   .venv\Scripts\python.exe bot.py
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   .\.venv\Scripts\python.exe bot.py
    ```
 
-3. Add the bot to your Telegram group. Users can run:
+4. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
+
+## Current bot architecture
+
+- `bot.py` owns Telegram command/message/callback handlers, guide replies, the boost cooldown, and configured-admin checks.
+- `guide.py`, `knowledge_base.md`, and `problem_resolutions.json` provide the existing guide and resolution content.
+- `question_intelligence.py` classifies relevant support messages, applies content redaction, stores individual records, groups similar reports, and creates complete date-range reports. It has SQLite parity for local development.
+- `supabase/schema.sql` is the full SQL Editor setup. `supabase/migrations/` contains additive migrations.
+- `supabase/functions/daily-question-report/` and `supabase/schedule_daily_report.sql` implement hosted report generation and delivery, independent of the Python bot process.
+
+The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. Add the bot as a group administrator or disable privacy mode if it should see ordinary group messages.
+
+## Admin Telegram commands
+
+Set `ADMIN_USER_IDS` before using these. They are private admin operations; the bot checks the Telegram numeric user ID.
+
+```text
+/questions [status]
+/questions status=unanswered category=withdrawal priority=high chat=-100123456 user=123456
+/qsearch <words>
+/qstatus <question-id> <unanswered|partially_answered|answered|needs_human_review|resolved|ignored>
+/qnote <question-id> <investigation note>
+/qresolve <question-id> <resolution summary>
+/qshow <question-id>
+/qhistory <Telegram-user-id>
+/qassign <question-id> <admin-Telegram-user-id>
+/dailyreport [YYYY-MM-DD] [Timezone]
+```
+
+`/dailyreport` defaults to the current date in `REPORT_TIMEZONE` (default `Asia/Kolkata`). It stores an idempotent report in Supabase and sends the complete report as JSON and CSV to the admin who requested it. Reports paginate question rows in batches and retain every question, including duplicates. The legacy `/unanswered` command remains available and reads the older table; use `/questions unanswered` for new records.
+
+## End-of-day delivery while the bot is offline
+
+The Python bot's `/dailyreport` command is manual. For automatic daily generation when Render or the bot is offline, deploy the Edge Function and schedule it in Supabase Cron:
+
+1. Enable the `pg_cron`, `pg_net`, and Vault extensions in the Supabase Dashboard.
+2. Link the Supabase CLI to this project, then deploy:
+
+   ```powershell
+   supabase functions deploy daily-question-report --no-verify-jwt
+   ```
+
+   The function disables gateway JWT verification because Cron calls it service-to-service; it then checks a separate `x-report-secret` value. Keep the function secret private.
+3. Set Edge Function secrets in the Supabase Dashboard or CLI:
 
    ```text
-   /boost 749488
+   SUPABASE_SERVICE_ROLE_KEY=<server-only Supabase secret key>
+   TELEGRAM_BOT_TOKEN=<bot token>
+   REPORT_CHAT_ID=<private admin chat or designated admin group ID>
+   REPORT_TIMEZONE=Asia/Kolkata
+   DAILY_REPORT_WEBHOOK_SECRET=<long random secret>
    ```
 
-   If Telegram requires the bot's username in a group, use
-   `/boost@YourBotUsername 749488`.
+   `SUPABASE_URL` is supplied by hosted Supabase Edge Functions; set it explicitly for local testing if needed.
+4. Add these three secrets to Supabase Vault: `ipay_report_url` (project URL), `ipay_report_api_key` (Supabase server secret key), and `ipay_report_secret` (the same value as `DAILY_REPORT_WEBHOOK_SECRET`). Then run [`supabase/schedule_daily_report.sql`](supabase/schedule_daily_report.sql) in SQL Editor. The supplied schedule runs at 23:59 Asia/Kolkata (18:29 UTC) and retries failed/pending delivery every ten minutes.
+5. Check Supabase Cron job history and the `daily_reports.delivery_status` field after the first scheduled run.
 
-   For a photo caption in a group with privacy mode enabled, address the
-   command to the bot, for example `/boost@YourBotUsername 749488`. A plain
-   caption such as `749488 boost my withdrawal` is only delivered when the bot
-   is an admin or group privacy is disabled. If you change privacy settings,
-   remove the bot from the group and add it again.
+The report includes message/question totals, categories and statuses, all individual questions and bot responses, repeated problem clusters, group activity, and suggested knowledge-gap reviews. Large exports split into numbered JSON/CSV files rather than dropping rows. Duplicate delivery is prevented after a successful send; failed attempts remain eligible for retry.
 
-The bot publishes `/start` and `/boost` in the Telegram command menu. Common
-mistyped commands `/bost`, `/boos`, `/boostt`, and `/bot` also run the same
-UID-validated support handler. Other commands and ordinary messages do not
-receive bot replies. Each boost request must contain exactly one six-digit UID.
-Menu navigation edits the welcome message rather than posting a new message
-for each screen.
+## Tests
 
-The Supabase schema includes the persistent boost cooldown table and RPC. If
-you update from an earlier schema, rerun `supabase/schema.sql` in the SQL
-Editor so the cooldown table, request log, and function are created. The
-`users` table keeps the latest UID per Telegram user; each individual attempt
-is recorded in `boost_requests`, including whether it was received or blocked
-by the cooldown and whether it came from a command or media caption.
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-## Supabase storage
-
-The bot uses SQLite by default. To store bot data in Supabase, first run
-[`supabase/schema.sql`](supabase/schema.sql) once in the Supabase SQL Editor.
-Install dependencies with `pip install -r requirements.txt`, then set
-`SUPABASE_URL` and `SUPABASE_SECRET_KEY` in the bot's private environment (or
-the hosting service's secret settings). The secret key must stay on the bot
-server; do not put it in source control or use the publishable key for this
-private server-side data. When both variables are set, the bot uses Supabase
-for users, settings, custom FAQs, unanswered questions, and message history.
-When they are empty, it keeps using SQLite. Existing SQLite rows are not
-automatically copied to Supabase.
+Tests use SQLite and mocked APIs. A live Supabase migration, Telegram delivery, and hosted Cron run require the project's external credentials and must be verified after deployment.
