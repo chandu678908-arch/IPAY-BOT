@@ -399,7 +399,7 @@ class BotTests(unittest.TestCase):
         custom_images = self.root / "custom_images"
         custom_images.mkdir()
         for filename in (
-            "wallets_payin.jpg",
+            "supported_wallets.png",
             "security.jpg",
             "commission.jpg",
             "deposit_problem.jpg",
@@ -421,6 +421,7 @@ class BotTests(unittest.TestCase):
                 self.subTest(action=action),
                 patch.object(bot, "START_URL", ""),
                 patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images),
+                patch.object(bot, "WALLET_IMAGE_PATH", custom_images / "supported_wallets.png"),
                 patch.object(bot, "HOW_IPAY_WORKS_IMAGE_PATH", custom_images / "how_ipay_works.jpg"),
                 patch.object(bot, "HOW_TO_PLACE_ORDER_IMAGE_PATH", custom_images / "how_to_place_order.jpg"),
                 patch.object(bot, "GUIDELINES_IMAGE_PATH", custom_images / "smart_guidelines.jpg"),
@@ -537,11 +538,11 @@ class BotTests(unittest.TestCase):
         text = message.reply_photo.await_args.kwargs["caption"]
         self.assertIn("WELCOME TO iPAY", text)
         ET.fromstring(f"<root>{text}</root>")
-        self.assertNotIn("<b><b>", text)
-        self.assertEqual(text.count("<b>"), text.count("</b>"))
+        self.assertNotIn("<b>", text)
+        self.assertNotIn("</b>", text)
         self.assertNotIn("![", text)
         self.assertNotIn("<tg-emoji", text)
-        self.assertTrue(text.startswith("<b>WELCOME TO iPAY</b> ⚡\n\n"))
+        self.assertTrue(text.startswith("WELCOME TO iPAY ⚡\n\n"))
         self.assertIn(
             "📈 Up to 4% commission on eligible completed orders\n\n",
             text,
@@ -1977,8 +1978,10 @@ class BotTests(unittest.TestCase):
         )
         with patch.object(
             bot,
-            "CUSTOM_IMAGES_DIR",
-            Path(__file__).resolve().parents[1] / "custom_images",
+            "WALLET_IMAGE_PATH",
+            Path(__file__).resolve().parents[1]
+            / "custom_images"
+            / "supported_wallets.png",
         ):
             asyncio.run(
                 bot.handle_callback(
@@ -1990,10 +1993,7 @@ class BotTests(unittest.TestCase):
         query.message.reply_photo.assert_awaited_once()
         query.delete_message.assert_awaited_once()
         sent_photo = query.message.reply_photo.await_args.kwargs
-        self.assertEqual(
-            sent_photo["photo"].filename,
-            "wallets_payin.jpg",
-        )
+        self.assertEqual(sent_photo["photo"].filename, "supported_wallets.png")
         self.assertEqual(
             sent_photo["caption"],
             (
@@ -2020,6 +2020,17 @@ class BotTests(unittest.TestCase):
             ],
         )
 
+    def test_wallet_command_uses_the_supported_wallet_image(self):
+        message = SimpleNamespace(
+            reply_photo=AsyncMock(),
+            reply_text=AsyncMock(),
+        )
+        asyncio.run(bot._send_wallets(message))
+        message.reply_photo.assert_awaited_once()
+        sent_photo = message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "supported_wallets.png")
+        self.assertIn("SUPPORTED WALLETS", sent_photo["caption"])
+
     def test_payin_and_payout_update_caption_without_replacing_wallet_image(self):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
@@ -2034,8 +2045,10 @@ class BotTests(unittest.TestCase):
         ):
             with self.subTest(action=action), patch.object(
                 bot,
-                "CUSTOM_IMAGES_DIR",
-                Path(__file__).resolve().parents[1] / "custom_images",
+                "WALLET_IMAGE_PATH",
+                Path(__file__).resolve().parents[1]
+                / "custom_images"
+                / "supported_wallets.png",
             ):
                 message = SimpleNamespace(
                     photo=[object()],
@@ -2062,7 +2075,7 @@ class BotTests(unittest.TestCase):
                 query.message.reply_photo.assert_awaited_once()
                 query.delete_message.assert_awaited_once()
                 media = query.message.reply_photo.await_args.kwargs
-                self.assertEqual(media["photo"].filename, "wallets_payin.jpg")
+                self.assertEqual(media["photo"].filename, "supported_wallets.png")
                 self.assertIn(expected_title, media["caption"])
                 for wallet in expected_wallets:
                     self.assertIn(wallet, media["caption"])

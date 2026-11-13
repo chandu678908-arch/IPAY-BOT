@@ -102,8 +102,13 @@ CE_SHIELD = '<tg-emoji emoji-id="5251203410396458957">🛡</tg-emoji>'
 CE_WARN = '<tg-emoji emoji-id="6116176048188035743">⚠️</tg-emoji>'
 CE_BELL = '<tg-emoji emoji-id="5458603043203327669">🔔</tg-emoji>'
 CE_CHAT = '<tg-emoji emoji-id="5443038326535759644">💬</tg-emoji>'
+_configured_welcome_image = os.getenv("WELCOME_IMAGE_PATH", "").strip()
+# Older deployments used this path in their environment settings. Keep those
+# deployments on the new banner without requiring a separate configuration edit.
+if _configured_welcome_image == "custom_images/welcome_home_compressed.jpg":
+    _configured_welcome_image = "custom_images/welcome_new_user.jpg"
 WELCOME_IMAGE_PATH = _asset_path(
-    os.getenv("WELCOME_IMAGE_PATH", "custom_images/welcome_new_user.jpg")
+    _configured_welcome_image or "custom_images/welcome_new_user.jpg"
 )
 SUPPORT_IMAGE_PATH = _asset_path(
     os.getenv("SUPPORT_IMAGE_PATH", "custom_images/support_home_compressed.jpg")
@@ -128,6 +133,9 @@ SUGGESTION_IMAGE_PATH = _asset_path(
 )
 REFERRAL_IMAGE_PATH = _asset_path(
     os.getenv("REFERRAL_IMAGE_PATH", "custom_images/referral_rewards.png")
+)
+WALLET_IMAGE_PATH = _asset_path(
+    os.getenv("WALLET_IMAGE_PATH", "custom_images/supported_wallets.png")
 )
 GUIDE_PDF_PATH = _asset_path(os.getenv("GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"))
 GUIDE_IMAGE_DIR = _asset_path(os.getenv("GUIDE_IMAGE_DIR", "guide_pages"))
@@ -163,7 +171,7 @@ _SUPABASE_CLIENT = None
 _SUPABASE_CLIENT_LOCK = threading.Lock()
 
 WELCOME = (
-    "<b>WELCOME TO iPAY</b> ⚡\n\n"
+    "WELCOME TO iPAY ⚡\n\n"
     "📈 Up to 4% commission on eligible completed orders\n\n"
     "🎯 Rewards on selected activity orders\n\n"
     "💼 Quick access to withdrawal support guidance\n\n"
@@ -2362,7 +2370,7 @@ async def _send_wallets(message) -> None:
     if not message:
         return
     caption = _wallet_caption("overview")
-    image_path = CUSTOM_IMAGES_DIR / "wallets_payin.jpg"
+    image_path = WALLET_IMAGE_PATH
     keyboard = wallets_keyboard()
     if image_path.is_file():
         try:
@@ -2726,7 +2734,7 @@ async def _show_wallet_menu(update: Update, mode: str = "payin") -> None:
 
     caption = _wallet_caption(mode)
     keyboard = wallets_keyboard()
-    image_path = CUSTOM_IMAGES_DIR / "wallets_payin.jpg"
+    image_path = WALLET_IMAGE_PATH
     if not await _replace_callback_image(update, image_path, caption, keyboard):
         await _present_callback(update, caption, keyboard)
 
