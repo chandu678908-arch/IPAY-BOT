@@ -146,6 +146,10 @@ SUPABASE_SECRET_KEY = (
 ).strip()
 RATE_LIMIT_SECONDS = max(0.5, float(os.getenv("RATE_LIMIT_SECONDS", "2")))
 BOOST_COOLDOWN_SECONDS = 5 * 60
+BOOST_UID_PROMPT = (
+    "📌 To send your withdrawal boost details, use /boost followed by your "
+    "six-digit iPAY UID (example: /boost 123456)."
+)
 REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
 ADMIN_USER_IDS = {
@@ -1670,9 +1674,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args = getattr(context, "args", []) or []
     uid = args[0].strip("#:, -") if len(args) == 1 else ""
     if not re.fullmatch(r"\d{6}", uid):
-        await message.reply_text(
-            f"{ICON_PIN} Invalid UID. Please mention your six-digit iPay UID after /boost."
-        )
+        await message.reply_text(BOOST_UID_PROMPT)
         return
 
     user = getattr(update, "effective_user", None)
@@ -1843,10 +1845,8 @@ async def boost_caption_handler(
 
     uids = re.findall(r"(?<!\d)\d{6}(?!\d)", caption)
     if len(uids) != 1:
-        if re.search(r"(?i)/(?:boost|bost|boos|boostt|bot)\b", caption):
-            _mark_handled_boost_message(context, update, message)
-            context.args = []
-            await boost_command(update, context)
+        _mark_handled_boost_message(context, update, message)
+        await message.reply_text(BOOST_UID_PROMPT)
         return
 
     _mark_handled_boost_message(context, update, message)
@@ -3361,6 +3361,15 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         extracted_uid = boost_match.group(1).strip()
         context.args = [extracted_uid]
         await boost_command(update, context)
+        return
+
+    # Keep boost-related requests out of the general AI answer path, which can
+    # otherwise return older or unrelated wording when no UID was included.
+    if re.search(
+        r"(?i)(?:/(?:boost|bost|boos|boostt|bot)\b|\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\b)",
+        text,
+    ):
+        await message.reply_text(BOOST_UID_PROMPT)
         return
 
     # Handle explicit UID requests without claiming account verification.

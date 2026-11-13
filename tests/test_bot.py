@@ -2105,7 +2105,8 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(args=["79098"])
         asyncio.run(bot.boost_command(update, context))
         message.reply_text.assert_awaited_once()
-        self.assertIn("Invalid UID", message.reply_text.await_args.args[0])
+        self.assertIn("six-digit iPAY UID", message.reply_text.await_args.args[0])
+        self.assertNotIn("invalid", message.reply_text.await_args.args[0].lower())
 
     def test_boost_command_limits_each_user_to_one_request_per_five_minutes(self):
         db_path = self.root / "boost-cooldowns.sqlite3"
@@ -2276,6 +2277,20 @@ class BotTests(unittest.TestCase):
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
         self.assertIn("Your UID was received for the withdrawal boost", response)
         self.assertNotIn("Contact support:", response)
+
+    def test_ai_reply_prompts_for_uid_instead_of_using_general_ai_for_boost(self):
+        message = SimpleNamespace(text="please boost my withdrawal", reply_text=AsyncMock(), message_id=124)
+        chat = SimpleNamespace(id=100, type="private")
+        user = SimpleNamespace(id=445, username="trader", first_name="Trader")
+        update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=user)
+        app = SimpleNamespace(bot_data={"guide": MagicMock()})
+        context = SimpleNamespace(application=app)
+
+        asyncio.run(bot.ai_reply(update, context))
+
+        message.reply_text.assert_awaited_once_with(bot.BOOST_UID_PROMPT)
+        self.assertNotIn("cannot", message.reply_text.await_args.args[0].lower())
+        self.assertNotIn("contact support", message.reply_text.await_args.args[0].lower())
 
     def test_new_user_center_buttons_deliver_expected_content(self):
         guide = self.make_guide()
