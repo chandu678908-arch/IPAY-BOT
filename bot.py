@@ -113,11 +113,14 @@ WELCOME_IMAGE_PATH = _asset_path(
 SUPPORT_IMAGE_PATH = _asset_path(
     os.getenv("SUPPORT_IMAGE_PATH", "custom_images/support_home_compressed.jpg")
 )
+CUSTOMER_SUPPORT_IMAGE_PATH = _asset_path(
+    os.getenv("CUSTOMER_SUPPORT_IMAGE_PATH", "custom_images/customer_service.png")
+)
 SECURITY_IMAGE_PATH = _asset_path(
     os.getenv("SECURITY_IMAGE_PATH", "custom_images/security.jpg")
 )
 ISSUES_IMAGE_PATH = _asset_path(
-    os.getenv("ISSUES_IMAGE_PATH", "custom_images/issues_home_compressed.jpg")
+    os.getenv("ISSUES_IMAGE_PATH", "custom_images/customer_service.png")
 )
 HOW_IPAY_WORKS_IMAGE_PATH = _asset_path(
     os.getenv("HOW_IPAY_WORKS_IMAGE_PATH", "custom_images/how_ipay_works.jpg")
@@ -3057,11 +3060,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _show_support_menu(update)
         return
     if action == "menu:customer_support":
-        await _present_callback(
+        caption = "Choose a customer support contact:"
+        keyboard = support_keyboard()
+        if not await _replace_callback_image(
             update,
-            "Choose a customer support contact:",
-            support_keyboard(),
-        )
+            CUSTOMER_SUPPORT_IMAGE_PATH,
+            caption,
+            keyboard,
+        ):
+            await _present_callback(update, caption, keyboard)
         return
     if action == "menu:referral":
         await _present_callback(

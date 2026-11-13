@@ -921,11 +921,11 @@ class BotTests(unittest.TestCase):
         message.reply_text.assert_not_awaited()
         message.reply_text.assert_not_awaited()
 
-    def test_issues_menu_replaces_home_image_with_issues_image(self):
+    def test_issues_menu_replaces_home_image_with_customer_service_image(self):
         image_path = (
             Path(__file__).resolve().parents[1]
             / "custom_images"
-            / "issues_home_compressed.jpg"
+            / "customer_service.png"
         )
         message = SimpleNamespace(
             photo=[object()],
@@ -952,7 +952,7 @@ class BotTests(unittest.TestCase):
         message.reply_photo.assert_awaited_once()
         query.delete_message.assert_awaited_once()
         media_kwargs = message.reply_photo.await_args.kwargs
-        self.assertEqual(media_kwargs["photo"].filename, "issues_home_compressed.jpg")
+        self.assertEqual(media_kwargs["photo"].filename, "customer_service.png")
         self.assertIn(
             "Identify your issue and click the button below",
             media_kwargs["caption"],
@@ -988,11 +988,14 @@ class BotTests(unittest.TestCase):
             message.reply_text.await_args.args[0],
         )
 
-    def test_customer_support_keeps_current_support_image(self):
+    def test_customer_support_callback_displays_customer_service_image(self):
+        image_path = self.root / "customer_service.png"
+        image_path.write_bytes(b"test image")
         query = SimpleNamespace(
             data="menu:customer_support",
             message=SimpleNamespace(
                 photo=[object()],
+                reply_photo=AsyncMock(),
                 reply_text=AsyncMock(),
             ),
             answer=AsyncMock(),
@@ -1003,20 +1006,30 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
-        asyncio.run(bot.handle_callback(SimpleNamespace(callback_query=query), context))
-        query.message.reply_text.assert_awaited_once()
+        with patch.object(bot, "CUSTOMER_SUPPORT_IMAGE_PATH", image_path):
+            asyncio.run(
+                bot.handle_callback(SimpleNamespace(callback_query=query), context)
+            )
+        query.message.reply_photo.assert_awaited_once()
+        query.message.reply_text.assert_not_awaited()
         query.delete_message.assert_awaited_once()
+        sent_photo = query.message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "customer_service.png")
         self.assertEqual(
-            query.message.reply_text.await_args.args[0],
+            sent_photo["caption"],
             "Choose a customer support contact:",
         )
+        self.assertIn("reply_markup", sent_photo)
         query.edit_message_media.assert_not_awaited()
 
-    def test_customer_support_callback_updates_text_boost_message(self):
+    def test_customer_support_callback_displays_image_from_text_message(self):
+        image_path = self.root / "customer_service.png"
+        image_path.write_bytes(b"test image")
         query = SimpleNamespace(
             data="menu:customer_support",
             message=SimpleNamespace(
                 photo=[],
+                reply_photo=AsyncMock(),
                 reply_text=AsyncMock(),
             ),
             answer=AsyncMock(),
@@ -1026,15 +1039,21 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
-        asyncio.run(bot.handle_callback(SimpleNamespace(callback_query=query), context))
+        with patch.object(bot, "CUSTOMER_SUPPORT_IMAGE_PATH", image_path):
+            asyncio.run(
+                bot.handle_callback(SimpleNamespace(callback_query=query), context)
+            )
         query.answer.assert_awaited_once()
-        query.message.reply_text.assert_awaited_once()
+        query.message.reply_photo.assert_awaited_once()
+        query.message.reply_text.assert_not_awaited()
         query.delete_message.assert_awaited_once()
+        sent_photo = query.message.reply_photo.await_args.kwargs
+        self.assertEqual(sent_photo["photo"].filename, "customer_service.png")
         self.assertEqual(
-            query.message.reply_text.await_args.args[0],
+            sent_photo["caption"],
             "Choose a customer support contact:",
         )
-        keyboard = query.message.reply_text.await_args.kwargs["reply_markup"]
+        keyboard = sent_photo["reply_markup"]
         customer_buttons = [
             button
             for row in keyboard.inline_keyboard
@@ -1742,7 +1761,7 @@ class BotTests(unittest.TestCase):
             )
         )
         with (
-            patch.object(bot, "ISSUES_IMAGE_PATH", image_dir / "issues_home_compressed.jpg"),
+            patch.object(bot, "ISSUES_IMAGE_PATH", image_dir / "customer_service.png"),
             patch.object(bot, "CUSTOM_IMAGES_DIR", image_dir),
         ):
             asyncio.run(bot.handle_callback(update, context))
@@ -1756,7 +1775,7 @@ class BotTests(unittest.TestCase):
         query.edit_message_media.assert_not_awaited()
         self.assertEqual(message.reply_photo.await_count, 3)
         final_menu = message.reply_photo.await_args.kwargs
-        self.assertEqual(final_menu["photo"].filename, "issues_home_compressed.jpg")
+        self.assertEqual(final_menu["photo"].filename, "customer_service.png")
         self.assertIn(
             "Identify your issue and click the button below",
             final_menu["caption"],
