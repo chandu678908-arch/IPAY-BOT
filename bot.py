@@ -122,6 +122,9 @@ SECURITY_IMAGE_PATH = _asset_path(
 ISSUES_IMAGE_PATH = _asset_path(
     os.getenv("ISSUES_IMAGE_PATH", "custom_images/customer_service.png")
 )
+DEPOSIT_IMAGE_PATH = _asset_path(
+    os.getenv("DEPOSIT_IMAGE_PATH", "custom_images/deposit_problem.jpg")
+)
 HOW_IPAY_WORKS_IMAGE_PATH = _asset_path(
     os.getenv("HOW_IPAY_WORKS_IMAGE_PATH", "custom_images/how_ipay_works.jpg")
 )
@@ -3160,7 +3163,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if action.startswith("wallet:")
             else support_options_keyboard()
         )
-        image_path = CUSTOM_IMAGES_DIR / filename
+        image_path = (
+            DEPOSIT_IMAGE_PATH
+            if action == "issue:deposit"
+            else CUSTOM_IMAGES_DIR / filename
+        )
         full_caption = explanation[:1024]
         if not await _replace_callback_image(
             update,

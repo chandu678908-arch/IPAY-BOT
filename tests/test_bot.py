@@ -421,6 +421,7 @@ class BotTests(unittest.TestCase):
                 self.subTest(action=action),
                 patch.object(bot, "START_URL", ""),
                 patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images),
+                patch.object(bot, "DEPOSIT_IMAGE_PATH", custom_images / "deposit_problem.jpg"),
                 patch.object(bot, "WALLET_IMAGE_PATH", custom_images / "supported_wallets.png"),
                 patch.object(bot, "HOW_IPAY_WORKS_IMAGE_PATH", custom_images / "how_ipay_works.jpg"),
                 patch.object(bot, "HOW_TO_PLACE_ORDER_IMAGE_PATH", custom_images / "how_to_place_order.jpg"),
@@ -1642,7 +1643,11 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
-        with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images):
+        with patch.object(
+            bot,
+            "DEPOSIT_IMAGE_PATH",
+            custom_images / "deposit_problem.jpg",
+        ):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
@@ -1763,6 +1768,7 @@ class BotTests(unittest.TestCase):
         with (
             patch.object(bot, "ISSUES_IMAGE_PATH", image_dir / "customer_service.png"),
             patch.object(bot, "CUSTOM_IMAGES_DIR", image_dir),
+            patch.object(bot, "DEPOSIT_IMAGE_PATH", image_dir / "deposit_problem.jpg"),
         ):
             asyncio.run(bot.handle_callback(update, context))
 
@@ -1807,7 +1813,11 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"guide": self.make_guide()})
         )
-        with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images):
+        with patch.object(
+            bot,
+            "DEPOSIT_IMAGE_PATH",
+            custom_images / "deposit_problem.jpg",
+        ):
             asyncio.run(
                 bot.handle_callback(SimpleNamespace(callback_query=query), context)
             )
