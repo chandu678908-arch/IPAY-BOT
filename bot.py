@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import tempfile
@@ -76,7 +77,6 @@ OFFICIAL_GROUP_URL = "https://t.me/+wtcrw4UYSDViMjA1"
 ICON_MESSAGE = "\U0001f4e9"
 ICON_LOCATION = "\U0001f4cd"
 ICON_CHECK = "\u2705"
-ICON_BOOKMARK = "\U0001f516"
 ICON_PIN = "\U0001f4cc"
 ICON_SPARKLE = "\U0001f4ab"
 ICON_ARROW = "\u27a1\ufe0f"
@@ -96,20 +96,14 @@ ICON_GEAR = "⚙️"
 
 # Telegram Premium Custom Emojis (from NewsEmoji and VickyTricks)
 ICON_GIFT = "🎁"
-CE_BOOST = '<tg-emoji emoji-id="6118531988073747281">⚡</tg-emoji>'
 CE_CHECK = '<tg-emoji emoji-id="6115942363312428399">✅</tg-emoji>'
 CE_MONEY = '<tg-emoji emoji-id="6118618471535218924">💰</tg-emoji>'
-CE_FIRE = '<tg-emoji emoji-id="6115927253617480897">🔥</tg-emoji>'
 CE_SHIELD = '<tg-emoji emoji-id="5251203410396458957">🛡</tg-emoji>'
 CE_WARN = '<tg-emoji emoji-id="6116176048188035743">⚠️</tg-emoji>'
-CE_GIFT = '<tg-emoji emoji-id="6118608485736256638">🎁</tg-emoji>'
 CE_BELL = '<tg-emoji emoji-id="5458603043203327669">🔔</tg-emoji>'
-CE_LINK = '<tg-emoji emoji-id="6116012762121377264">🔗</tg-emoji>'
-CE_CHART = '<tg-emoji emoji-id="5244837092042750681">📈</tg-emoji>'
-CE_EYE = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
 CE_CHAT = '<tg-emoji emoji-id="5443038326535759644">💬</tg-emoji>'
 WELCOME_IMAGE_PATH = _asset_path(
-    os.getenv("WELCOME_IMAGE_PATH", "custom_images/welcome_home_compressed.jpg")
+    os.getenv("WELCOME_IMAGE_PATH", "custom_images/welcome_new_user.jpg")
 )
 SUPPORT_IMAGE_PATH = _asset_path(
     os.getenv("SUPPORT_IMAGE_PATH", "custom_images/support_home_compressed.jpg")
@@ -169,12 +163,12 @@ _SUPABASE_CLIENT = None
 _SUPABASE_CLIENT_LOCK = threading.Lock()
 
 WELCOME = (
-    "⚡ <b>WELCOME TO iPAY</b> 🔥\n\n"
+    "<b>WELCOME TO iPAY</b> ⚡\n\n"
     "📈 Up to 4% commission on eligible completed orders\n\n"
-    "💸 Rewards on selected activity orders\n\n"
-    "🖥️ Quick access to withdrawal support guidance\n\n"
+    "🎯 Rewards on selected activity orders\n\n"
+    "💼 Quick access to withdrawal support guidance\n\n"
     "🪧 A scalable platform for earning opportunities\n\n"
-    "🕹️ Choose iPAY, choose a smarter path forward."
+    "🏛️ Choose iPAY, choose a smarter path forward."
 )
 ISSUES_PROMPT = "🔍 Identify your issue and click the button below to get the appropriate solution. 👇"
 
@@ -458,15 +452,6 @@ def new_user_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(f"{ICON_CLIPBOARD} Security & Alerts", callback_data="newuser:security_alerts")],
             [InlineKeyboardButton(f"{ICON_GIFT} Referral Rewards", callback_data="newuser:referral")],
             [InlineKeyboardButton(f"{ICON_BULB} Smart Sales Settings", callback_data="newuser:sales_settings")],
-            [_back_button()],
-        ]
-    )
-
-
-def suggestion_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [_support_button()],
             [_back_button()],
         ]
     )
@@ -1138,6 +1123,25 @@ def _contains_sensitive_input(text: str) -> bool:
     )
 
 
+def _extract_entity_text(message, entity) -> str:
+    if hasattr(entity, "extract") and callable(entity.extract):
+        return str(entity.extract(getattr(message, "text", "") or ""))
+    if hasattr(message, "parse_entity") and callable(message.parse_entity):
+        try:
+            return str(message.parse_entity(entity))
+        except Exception:
+            pass
+    if hasattr(message, "parse_caption_entity") and callable(message.parse_caption_entity):
+        try:
+            return str(message.parse_caption_entity(entity))
+        except Exception:
+            pass
+    text = getattr(message, "text", "") or getattr(message, "caption", "") or ""
+    offset = getattr(entity, "offset", 0)
+    length = getattr(entity, "length", 0)
+    return text[offset : offset + length]
+
+
 def _is_group_message_for_bot(message, bot) -> bool:
     reply = getattr(message, "reply_to_message", None)
     sender = getattr(reply, "from_user", None)
@@ -1149,12 +1153,17 @@ def _is_group_message_for_bot(message, bot) -> bool:
     if not username:
         return False
     expected_mention = f"@{username}".casefold()
-    text = message.text or ""
-    return any(
-        getattr(entity, "type", None) == "mention"
-        and entity.extract(text).casefold() == expected_mention
-        for entity in (getattr(message, "entities", None) or [])
-    )
+    text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+    if expected_mention in text.casefold():
+        return True
+
+    entities = getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []
+    for entity in entities:
+        if getattr(entity, "type", None) == "mention":
+            val = _extract_entity_text(message, entity).strip().casefold()
+            if val == expected_mention:
+                return True
+    return False
 
 
 def _group_conversation_id(
@@ -1775,13 +1784,7 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "\u25C6 iPAY \u2013 KEEP MOVING FORWARD!",
         ),
     )
-    user_data = getattr(context, "user_data", None)
-    if user_data is None:
-        style_index = 0
-    else:
-        style_index = (user_data.get("boost_reply_style_index", -1) + 1) % len(reply_styles)
-        user_data["boost_reply_style_index"] = style_index
-    heading, status, guidance, extra_tip, acknowledgment, caption = reply_styles[style_index]
+    heading, status, guidance, extra_tip, acknowledgment, caption = random.choice(reply_styles)
     reply_body = "\n".join(
         line.format(uid=safe_uid)
         for line in (status, guidance, extra_tip)
@@ -2890,40 +2893,6 @@ async def _send_how_to_place_order(update: Update) -> None:
         )
 
 
-async def _send_guidelines(update: Update) -> None:
-    keyboard = InlineKeyboardMarkup([[_back_button()]])
-    if not await _replace_callback_image(
-        update,
-        GUIDELINES_IMAGE_PATH,
-        "",
-        keyboard,
-    ):
-        await _replace_callback_text(
-            update,
-            f"{ICON_CLIPBOARD} iPAY Guidelines\n\nImage is currently unavailable.",
-            keyboard,
-        )
-
-
-async def _send_suggestion(update: Update) -> None:
-    caption = (
-        f"{ICON_BULB} <b>SUGGESTION &amp; FEEDBACK</b>\n\n"
-        "We value your feedback! If you have any suggestions to improve iPAY, "
-        "please share them with our support team.\n\n"
-        f"📩 Contact {SUPPORT_1} or {SUPPORT_2} to submit your suggestion.\n"
-        "🛡️ Stay safe: Official iPAY support will never ask for your OTP, PIN, or password."
-    )
-    keyboard = suggestion_keyboard()
-    if not await _replace_callback_image(
-        update,
-        SUGGESTION_IMAGE_PATH,
-        caption,
-        keyboard,
-        parse_mode="HTML",
-    ):
-        await _replace_callback_text(update, caption, keyboard)
-
-
 async def _send_security_alerts(update: Update) -> None:
     caption = (
         "🧾 <b>iPAY – SECURITY ALERT</b>\n\n"
@@ -3209,11 +3178,6 @@ def _matching_custom_faqs(question: str) -> List[Dict[str, Any]]:
     ][:3]
 
 
-def _looks_ipay_related(question: str, guide: Guide) -> bool:
-    """Conservative group filter: route only text that matches iPay guide topics."""
-    return bool(guide.retrieve(question, top_k=1))
-
-
 async def _ai_answer(
     question: str,
     chat_id: int,
@@ -3419,11 +3383,27 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # If the user tagged the bot alone or sent a greeting like hi/hii/hello
     clean_text = re.sub(r"@\w+", "", text).strip().lower()
-    if clean_text in {"", "hi", "hii", "hello", "hey", "help", "/hii", "/hi"}:
+    clean_norm = re.sub(r"[^\w\s]", "", clean_text).strip()
+    if clean_norm in {"", "hi", "hii", "hiii", "hello", "hey", "heyy", "help", "start", "/hii", "/hi"}:
         if is_group:
             await message.reply_text("Please tell me what you need help with.")
             return
         await _send_home_message(message)
+        return
+
+    # Direct bot identity inquiries
+    if clean_norm in {
+        "who are you", "who r u", "who you are", "what are you",
+        "who is this", "what is this bot", "tell me about you",
+        "kya ho tum", "aap kaun ho",
+    } or bool(re.search(r"^(?:who\s+(?:are\s+you|r\s+u)|what\s+is\s+this\s+bot)\b", clean_norm)):
+        intro_text = (
+            "👋 I am the official <b>iPAY Support Bot</b>!\n\n"
+            "I can help you understand our platform, learn how to place orders, "
+            "provide withdrawal guidance, explain platform guidelines, and connect you with human support.\n\n"
+            "Choose an option below to get started:"
+        )
+        await message.reply_text(intro_text, reply_markup=main_keyboard(), parse_mode="HTML")
         return
 
     now = time.monotonic()

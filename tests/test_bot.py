@@ -127,7 +127,6 @@ class BotTests(unittest.TestCase):
                 bot.start_keyboard(),
                 bot.notice_keyboard(),
                 bot.new_user_keyboard(),
-                bot.suggestion_keyboard(),
             ]
         callback_actions = {
             button.callback_data
@@ -520,7 +519,7 @@ class BotTests(unittest.TestCase):
         image_path = (
             Path(__file__).resolve().parents[1]
             / "custom_images"
-            / "welcome_home_compressed.jpg"
+            / "welcome_new_user.jpg"
         )
         message = SimpleNamespace(
             reply_text=AsyncMock(),
@@ -538,20 +537,22 @@ class BotTests(unittest.TestCase):
         text = message.reply_photo.await_args.kwargs["caption"]
         self.assertIn("WELCOME TO iPAY", text)
         ET.fromstring(f"<root>{text}</root>")
+        self.assertNotIn("<b><b>", text)
+        self.assertEqual(text.count("<b>"), text.count("</b>"))
         self.assertNotIn("![", text)
         self.assertNotIn("<tg-emoji", text)
-        self.assertTrue(text.startswith("⚡ <b>WELCOME TO iPAY</b> 🔥\n\n"))
+        self.assertTrue(text.startswith("<b>WELCOME TO iPAY</b> ⚡\n\n"))
         self.assertIn(
             "📈 Up to 4% commission on eligible completed orders\n\n",
             text,
         )
         self.assertNotIn("Your guide to wallets, payments, and support:", text)
         self.assertIn(
-            "💸 Rewards on selected activity orders\n\n",
+            "🎯 Rewards on selected activity orders\n\n",
             text,
         )
         self.assertIn(
-            "🖥️ Quick access to withdrawal support guidance\n\n",
+            "💼 Quick access to withdrawal support guidance\n\n",
             text,
         )
         self.assertIn(
@@ -559,7 +560,7 @@ class BotTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "🕹️ Choose iPAY, choose a smarter path forward.",
+            "🏛️ Choose iPAY, choose a smarter path forward.",
             text,
         )
         self.assertNotIn("Hello @", text)
@@ -583,7 +584,7 @@ class BotTests(unittest.TestCase):
         image_path = (
             Path(__file__).resolve().parents[1]
             / "custom_images"
-            / "welcome_home_compressed.jpg"
+            / "welcome_new_user.jpg"
         )
         message = SimpleNamespace(
             photo=[object()],
@@ -607,14 +608,14 @@ class BotTests(unittest.TestCase):
         message.reply_photo.assert_awaited_once()
         query.delete_message.assert_awaited_once()
         sent_photo = message.reply_photo.await_args.kwargs
-        self.assertEqual(sent_photo["photo"].filename, "welcome_home_compressed.jpg")
+        self.assertEqual(sent_photo["photo"].filename, "welcome_new_user.jpg")
         self.assertIn("WELCOME TO iPAY", sent_photo["caption"])
 
     def test_main_menu_from_text_replaces_message_with_home_image(self):
         image_path = (
             Path(__file__).resolve().parents[1]
             / "custom_images"
-            / "welcome_home_compressed.jpg"
+            / "welcome_new_user.jpg"
         )
         message = SimpleNamespace(
             photo=[],
@@ -636,7 +637,7 @@ class BotTests(unittest.TestCase):
         message.reply_photo.assert_awaited_once()
         self.assertEqual(
             message.reply_photo.await_args.kwargs["photo"].filename,
-            "welcome_home_compressed.jpg",
+            "welcome_new_user.jpg",
         )
         query.delete_message.assert_awaited_once()
         message.reply_text.assert_not_awaited()
@@ -1287,7 +1288,6 @@ class BotTests(unittest.TestCase):
 
     def test_group_filter_skips_unrelated_unaddressed_conversation(self):
         self.assertFalse(self.make_guide().retrieve("what time is dinner", top_k=1))
-        self.assertFalse(bot._looks_ipay_related("what time is dinner", self.make_guide()))
 
     def test_missing_ai_key_keeps_guide_menus_available(self):
         answer, pages = asyncio.run(
@@ -2116,7 +2116,8 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(args=["749488"], user_data={})
         with patch.object(bot, "DB_PATH", db_path), \
                 patch.object(bot.time, "time", side_effect=[1000, 1100]), \
-                patch.object(bot, "save_user_uid"):
+                patch.object(bot, "save_user_uid"), \
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.boost_command(update, context))
             asyncio.run(bot.boost_command(update, context))
         responses = [call.args[0] for call in message.reply_text.await_args_list]
@@ -2144,7 +2145,9 @@ class BotTests(unittest.TestCase):
         user = SimpleNamespace(id=444, username="trader", first_name="Trader")
         update = SimpleNamespace(effective_message=message, effective_user=user)
         context = SimpleNamespace(args=[], user_data={})
-        with patch.object(bot, "DB_PATH", db_path), patch.object(bot, "save_user_uid"):
+        with patch.object(bot, "DB_PATH", db_path), \
+                patch.object(bot, "save_user_uid"), \
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.boost_caption_handler(update, context))
         message.reply_text.assert_awaited_once()
         response = message.reply_text.await_args.args[0]
@@ -2168,7 +2171,8 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(args=["749488"])
         with patch.object(bot, "save_user_uid") as save_user_uid, \
                 patch.object(bot, "reserve_boost_request", return_value=0), \
-                patch.object(bot, "record_boost_request"):
+                patch.object(bot, "record_boost_request"), \
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.boost_command(update, context))
         save_user_uid.assert_called_once_with(333, "test_user", "Test", "749488")
         response = message.reply_text.await_args.args[0]
@@ -2226,7 +2230,8 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(args=["749488"])
         with patch.object(bot, "save_user_uid"), \
                 patch.object(bot, "reserve_boost_request", return_value=0), \
-                patch.object(bot, "record_boost_request"):
+                patch.object(bot, "record_boost_request"), \
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.boost_command(update, context))
         response = message.reply_text.await_args.args[0]
         self.assertIn("WITHDRAWAL SUPPORT DETAILS", response)
@@ -2236,14 +2241,20 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("ACTIVATED SUCCESSFULLY", response)
         self.assertNotIn("Priority Support Activated", response)
 
-    def test_all_boost_reply_styles_have_unique_acknowledgments_and_captions(self):
+    def test_boost_reply_style_is_selected_randomly_for_each_request(self):
         context = SimpleNamespace(args=["749488"], user_data={})
         user = SimpleNamespace(id=333, username="test_user", first_name="Test")
         acknowledgments = []
         captions = []
+        selections = iter(range(7))
+
+        def choose_style(styles):
+            return styles[next(selections)]
+
         with patch.object(bot, "reserve_boost_request", return_value=0), \
                 patch.object(bot, "record_boost_request"), \
-                patch.object(bot, "save_user_uid"):
+                patch.object(bot, "save_user_uid"), \
+                patch.object(bot.random, "choice", side_effect=choose_style) as choose:
             for _ in range(7):
                 message = SimpleNamespace(text="/boost 749488", reply_text=AsyncMock())
                 update = SimpleNamespace(effective_message=message, effective_user=user)
@@ -2257,6 +2268,8 @@ class BotTests(unittest.TestCase):
                     next(line for line in response.splitlines() if "withdrawal boost" in line.lower())
                 )
                 captions.append(response.splitlines()[-1])
+        self.assertEqual(choose.call_count, 7)
+        self.assertEqual(context.user_data, {})
         self.assertEqual(len(set(acknowledgments)), 7)
         self.assertEqual(len(set(captions)), 7)
 
@@ -2269,7 +2282,8 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(application=app)
         with patch.object(bot, "save_user_uid"), \
                 patch.object(bot, "reserve_boost_request", return_value=0), \
-                patch.object(bot, "record_boost_request"):
+                patch.object(bot, "record_boost_request"), \
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.ai_reply(update, context))
         message.reply_text.assert_awaited_once()
         response = message.reply_text.await_args.args[0]
