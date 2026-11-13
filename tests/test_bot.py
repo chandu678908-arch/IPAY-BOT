@@ -543,19 +543,16 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("![", text)
         self.assertNotIn("<tg-emoji", text)
         self.assertTrue(text.startswith("WELCOME TO iPAY ⚡\n\n"))
-        self.assertIn(
-            "📈 Up to 4% commission on eligible completed orders\n\n",
+        self.assertEqual(
             text,
+            "WELCOME TO iPAY ⚡\n\n"
+            "📈 Up to 4% commission on eligible completed orders\n"
+            "🎯 Rewards on selected activity orders\n"
+            "💼 Quick access to withdrawal support guidance\n"
+            "🪧 A scalable platform for earning opportunities\n\n"
+            "🏛️ Choose iPAY, choose a smarter path forward.",
         )
         self.assertNotIn("Your guide to wallets, payments, and support:", text)
-        self.assertIn(
-            "🎯 Rewards on selected activity orders\n\n",
-            text,
-        )
-        self.assertIn(
-            "💼 Quick access to withdrawal support guidance\n\n",
-            text,
-        )
         self.assertIn(
             "🪧 A scalable platform for earning opportunities",
             text,

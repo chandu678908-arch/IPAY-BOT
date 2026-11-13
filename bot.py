@@ -172,9 +172,9 @@ _SUPABASE_CLIENT_LOCK = threading.Lock()
 
 WELCOME = (
     "WELCOME TO iPAY ⚡\n\n"
-    "📈 Up to 4% commission on eligible completed orders\n\n"
-    "🎯 Rewards on selected activity orders\n\n"
-    "💼 Quick access to withdrawal support guidance\n\n"
+    "📈 Up to 4% commission on eligible completed orders\n"
+    "🎯 Rewards on selected activity orders\n"
+    "💼 Quick access to withdrawal support guidance\n"
     "🪧 A scalable platform for earning opportunities\n\n"
     "🏛️ Choose iPAY, choose a smarter path forward."
 )
