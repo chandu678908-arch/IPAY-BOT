@@ -546,17 +546,13 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             text,
             "WELCOME TO iPAY ⚡\n\n"
-            "📈 Up to 4% commission on eligible completed orders\n"
-            "🎯 Rewards on selected activity orders\n"
-            "💼 Quick access to withdrawal support guidance\n"
-            "🪧 A scalable platform for earning opportunities\n\n"
+            "📈 Up to 4% commission on orders\n"
+            "🎯 Rewards on selected activities\n"
+            "💼 Easy access to withdrawal support\n"
+            "🪧 Scalable earning opportunities\n\n"
             "🏛️ Choose iPAY, choose a smarter path forward.",
         )
         self.assertNotIn("Your guide to wallets, payments, and support:", text)
-        self.assertIn(
-            "🪧 A scalable platform for earning opportunities",
-            text,
-        )
         self.assertIn(
             "🏛️ Choose iPAY, choose a smarter path forward.",
             text,
@@ -716,7 +712,8 @@ class BotTests(unittest.TestCase):
         query.delete_message.assert_awaited_once()
         sent_photo = message.reply_photo.await_args.kwargs
         self.assertEqual(sent_photo["photo"].filename, "security.jpg")
-        self.assertNotIn("caption", sent_photo)
+        self.assertEqual(sent_photo["caption"], bot.SECURITY_ALERT_TEXT)
+        self.assertLessEqual(len(sent_photo["caption"]), 1024)
         markup = sent_photo["reply_markup"]
         self.assertIn(
             "menu:customer_support",
@@ -776,7 +773,16 @@ class BotTests(unittest.TestCase):
                     message.reply_photo.await_args.kwargs["photo"].filename,
                     image_name,
                 )
-                self.assertNotIn("caption", message.reply_photo.await_args.kwargs)
+                if action == "menu:security":
+                    self.assertEqual(
+                        message.reply_photo.await_args.kwargs["caption"],
+                        bot.SECURITY_ALERT_TEXT,
+                    )
+                else:
+                    self.assertNotIn(
+                        "caption",
+                        message.reply_photo.await_args.kwargs,
+                    )
                 query.delete_message.assert_awaited_once()
                 message.reply_text.assert_not_awaited()
 
@@ -883,7 +889,10 @@ class BotTests(unittest.TestCase):
                 bot._send_security(message)
             )
         message.reply_photo.assert_awaited_once()
-        self.assertNotIn("caption", message.reply_photo.await_args.kwargs)
+        self.assertEqual(
+            message.reply_photo.await_args.kwargs["caption"],
+            bot.SECURITY_ALERT_TEXT,
+        )
         keyboard = message.reply_photo.await_args.kwargs["reply_markup"]
         self.assertNotIn(
             "Group Support",

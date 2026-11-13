@@ -172,11 +172,28 @@ _SUPABASE_CLIENT_LOCK = threading.Lock()
 
 WELCOME = (
     "WELCOME TO iPAY ⚡\n\n"
-    "📈 Up to 4% commission on eligible completed orders\n"
-    "🎯 Rewards on selected activity orders\n"
-    "💼 Quick access to withdrawal support guidance\n"
-    "🪧 A scalable platform for earning opportunities\n\n"
+    "📈 Up to 4% commission on orders\n"
+    "🎯 Rewards on selected activities\n"
+    "💼 Easy access to withdrawal support\n"
+    "🪧 Scalable earning opportunities\n\n"
     "🏛️ Choose iPAY, choose a smarter path forward."
+)
+SECURITY_ALERT_TEXT = (
+    "⚠️ iPAY SECURITY ALERT\n\n"
+    "⚠️ Beware of Fake Calls & Scammers!\n\n"
+    "Dear iPAY Users,\n\n"
+    "🚫 iPAY WILL NEVER:\n"
+    "▪️ Ask for your OTP, PIN, or password.\n"
+    "▪️ Request payments to personal UPI IDs.\n"
+    "▪️ Demand money to unlock your account.\n"
+    "▪️ Ask for sensitive banking details.\n\n"
+    "🛡️ STAY SAFE:\n"
+    "✨ Never share your login details.\n"
+    "✨ Avoid suspicious payment requests.\n"
+    "✨ Contact only official iPAY support.\n"
+    "✨ Report suspicious calls immediately.\n\n"
+    "🔒 Stay Alert. Stay Safe. Protect Your Funds.\n\n"
+    "— iPAY TEAM"
 )
 ISSUES_PROMPT = "🔍 Identify your issue and click the button below to get the appropriate solution. 👇"
 
@@ -2405,13 +2422,13 @@ async def _send_security(message) -> None:
         with SECURITY_IMAGE_PATH.open("rb") as image:
             await message.reply_photo(
                 photo=InputFile(image),
+                caption=SECURITY_ALERT_TEXT,
                 reply_markup=keyboard,
             )
     except (OSError, TelegramError) as exc:
         log.error("Could not send security image (%s): %s", type(exc).__name__, exc)
         await message.reply_text(
-            "The security image could not be sent. Keep passwords, OTPs, and PINs "
-            "private, and contact customer support if you need help.",
+            SECURITY_ALERT_TEXT,
             reply_markup=keyboard,
         )
 
@@ -2796,12 +2813,12 @@ async def _show_security_menu(update: Update) -> None:
     if not await _replace_callback_image(
         update,
         SECURITY_IMAGE_PATH,
-        "",
+        SECURITY_ALERT_TEXT,
         keyboard,
     ):
         await _present_callback(
             update,
-            "Security image unavailable.",
+            SECURITY_ALERT_TEXT,
             keyboard,
         )
 
