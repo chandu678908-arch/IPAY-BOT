@@ -1506,7 +1506,17 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         )
         return
     if not claimed:
+        log.info(
+            "Skipped duplicate screenshot reply (chat_id=%s, message_id=%s)",
+            chat.id,
+            message.message_id,
+        )
         return
+    log.info(
+        "Screenshot reply claim acquired (chat_id=%s, message_id=%s)",
+        chat.id,
+        message.message_id,
+    )
     templates = ORDER_IMAGE_REPLIES if category == "order" else WITHDRAWAL_IMAGE_REPLIES
     user = update.effective_user
     user_id = getattr(user, "id", None)
@@ -1520,6 +1530,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         await _reply_to_screenshot(context, chat.id, message.message_id, selected)
     except TelegramError as exc:
         log.warning("Could not send screenshot reply (%s)", type(exc).__name__)
+    else:
+        log.info(
+            "Sent screenshot reply (chat_id=%s, message_id=%s)",
+            chat.id,
+            message.message_id,
+        )
 
 
 async def _reply_to_screenshot(context, chat_id: int, message_id: int, text: str) -> None:
