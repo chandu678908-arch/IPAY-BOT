@@ -2377,7 +2377,7 @@ class BotTests(unittest.TestCase):
                 "▪️ ✅ Paytm\n"
                 "▪️ ✅ MobiKwik\n"
                 "▪️ ✅ Freecharge\n\n"
-                "💼 BUSINESS WALLETS\n"
+                "💼 BUSINESS WALLETS (Recommended)\n"
                 "▪️ Google Pay Business\n"
                 "▪️ PhonePe Business\n"
                 "▪️ Paytm Business\n\n"
