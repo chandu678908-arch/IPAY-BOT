@@ -15,6 +15,14 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    .\.venv\Scripts\python.exe bot.py
    ```
 
+   Automatic group screenshot replies use local OCR. Install the Tesseract OCR
+   engine on the bot host and make its `tesseract` executable available on
+   `PATH`; the Python packages are included in `requirements.txt`. Images are
+   processed locally and are not sent to the conversational AI service.
+
+   On Docker deployments, set `TESSERACT_CMD=/usr/bin/tesseract`. The supplied
+   `Dockerfile` installs the native OCR executable and sets this value.
+
 4. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
 
 ## Current bot architecture
@@ -25,7 +33,7 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
 - `supabase/schema.sql` is the full SQL Editor setup. `supabase/migrations/` contains additive migrations.
 - `supabase/functions/daily-question-report/` and `supabase/schedule_daily_report.sql` implement hosted report generation and delivery, independent of the Python bot process.
 
-The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. Add the bot as a group administrator or disable privacy mode if it should see ordinary group messages.
+The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot responses use `reply_to_message_id`, so Telegram anchors them to the uploaded image.
 
 ## Admin Telegram commands
 

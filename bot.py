@@ -1347,6 +1347,137 @@ async def activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         log.warning("Incoming message analytics failed (%s)", type(exc).__name__)
 
 
+ORDER_IMAGE_REPLIES = (
+    "◆ iPAY – ORDER STATUS\n\n▪️ Check order validity and payment details.\n▪️ Do not use Pocket UPI.\n🔄 Relink your iPAY wallet to refresh the locked order.\n▪️ Wait for wallet verification and system processing.\n\n⏰ Allow up to 24 hours.\n📞 Contact CS if the order is still unprocessed.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – LOCKED ORDER UPDATE\n\n▪️ Verify your order and payment details.\n▪️ Use only your iPAY-linked wallet. Do not use Pocket UPI.\n🔄 Reconnect your iPAY wallet to refresh the order.\n▪️ Allow the system to verify your wallet and process the request.\n\n⏰ Please allow up to 24 hours.\n📞 Contact CS if it remains unprocessed.\n\n◆ THANK YOU!",
+    "◆ iPAY – ORDER SUPPORT\n\n▪️ First, check your order status and payment information.\n▪️ Pocket UPI is not supported.\n🔄 Relink your iPAY wallet for order refresh.\n▪️ Wait while the system verifies the wallet connection and processes the order.\n\n⏰ Processing may take up to 24 hours.\n📞 Reach out to CS if the order is not processed.\n\n◆ KEEP CHECKING YOUR STATUS!",
+    "◆ iPAY – ORDER PROCESS\n\n1️⃣ Check order validity and payment details.\n2️⃣ Do not use Pocket UPI.\n3️⃣ Relink your iPAY wallet to refresh the locked order.\n4️⃣ Wait for wallet verification and system processing.\n\n⏰ Allow up to 24 hours for processing.\n📞 If still unprocessed, contact CS.\n\n◆ FOLLOW THE STEPS!",
+    "◆ iPAY – IMPORTANT ORDER NOTICE\n\n▪️ Make sure your order and payment details are correct.\n▪️ Always use your iPAY-linked wallet, not Pocket UPI.\n🔄 Reconnect your wallet to refresh the locked order.\n▪️ The system will verify the wallet and process the request.\n\n⏰ Please allow up to 24 hours.\n📞 Contact CS if the order remains unprocessed.\n\n◆ STAY INFORMED!",
+    "◆ iPAY – IMPORTANT ORDER NOTICE\n\n▪️ Make sure your order and payment details are correct.\n▪️ Always use your iPAY-linked wallet, not Pocket UPI.\n🔄 Reconnect your wallet to refresh the locked order.\n▪️ The system will verify the wallet and process the request.\n\n⏰ Please allow up to 24 hours.\n📞 Contact CS if the order remains unprocessed.\n\n◆ STAY INFORMED!",
+    "◆ iPAY – ORDER VERIFICATION\n\n▪️ Review your order validity and payment details.\n▪️ Pocket UPI must not be used.\n🔄 Relink your iPAY wallet to initiate the order refresh.\n▪️ Allow the system to verify the wallet connection and complete processing.\n\n⏰ Please allow up to 24 hours for the update.\n📞 Contact iPAY Customer Support if the order remains unprocessed.\n\n◆ iPAY SUPPORT – STAY UPDATED!",
+)
+
+WITHDRAWAL_IMAGE_REPLIES = (
+    "◆ iPAY – WITHDRAWAL STATUS\n\n▪️ Check your daily UPI limit.\n▪️ Ensure your UPI and bank are active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for wallet verification and processing.\n\n⏳ Allow time for the status update.\n📞 Contact CS if still locked.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – WITHDRAWAL UPDATE\n\n▪️ Verify your UPI limit and bank status.\n▪️ Make sure your UPI is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for system verification and processing.\n\n⏳ Please wait for the update.\n📞 Contact CS if the order remains locked.\n\n◆ THANK YOU!",
+    "◆ iPAY – WITHDRAWAL SUPPORT\n\n▪️ Check your UPI limit and bank account.\n▪️ Confirm your UPI can receive payments.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Allow time for wallet verification.\n\n⏳ Wait for the latest status.\n📞 Contact CS if the issue continues.\n\n◆ STAY INFORMED!",
+    "◆ iPAY – WITHDRAWAL PROCESS\n\n1️⃣ Check your daily UPI limit.\n2️⃣ Ensure your UPI and bank are active.\n3️⃣ Relink your locked order wallet to refresh the locked withdrawal.\n4️⃣ Wait for system processing.\n\n⏳ The order may remain locked temporarily.\n📞 Contact CS if unresolved.\n\n◆ FOLLOW THE STEPS!",
+    "◆ iPAY – IMPORTANT NOTICE\n\n▪️ Verify your UPI limit and bank status.\n▪️ Keep your UPI active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for wallet verification and processing.\n\n⏳ Allow time for an update.\n📞 Contact CS if still locked.\n\n◆ KEEP CHECKING!",
+    "◆ iPAY – WITHDRAWAL STATUS UPDATE\n\n▪️ Check your UPI limit and bank account.\n▪️ Ensure your UPI is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for system verification.\n\n⏳ Relinking may not unlock it immediately.\n📞 Contact CS if it remains locked.\n\n◆ THANK YOU FOR YOUR PATIENCE!",
+    "◆ iPAY – WITHDRAWAL VERIFICATION\n\n▪️ Review your UPI limit and bank status.\n▪️ Confirm your UPI account is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Allow time for system processing.\n\n⏳ The withdrawal may remain locked temporarily.\n📞 Contact CS if unresolved.\n\n◆ iPAY SUPPORT – STAY UPDATED!",
+)
+
+
+def _classify_locked_screenshot(text: str) -> Optional[str]:
+    """Use the page heading first, then require transaction context and locking."""
+    normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    has_lock = bool(re.search(r"\blocking\b", normalized))
+    has_transaction_context = bool(re.search(
+        r"\b(amount|quota|balance|income|commission|inr|usdt|\d{2,})\b", normalized
+    ))
+    if not has_lock or not has_transaction_context:
+        return None
+    order_heading = bool(re.search(r"\border\b", normalized))
+    withdrawal_heading = bool(re.search(r"\bwithdraw(?:al)?\b", normalized))
+    if order_heading == withdrawal_heading:
+        return None
+    return "order" if order_heading else "withdrawal"
+
+
+async def _read_screenshot_text(message, context) -> Optional[str]:
+    """OCR Telegram photo/document bytes locally; never upload transaction images."""
+    photo = getattr(message, "photo", None) or []
+    document = getattr(message, "document", None)
+    file_obj = photo[-1] if photo else document
+    if not file_obj:
+        return None
+    try:
+        telegram_file = await context.bot.get_file(file_obj.file_id)
+        image_bytes = bytes(await telegram_file.download_as_bytearray())
+    except (TelegramError, OSError, AttributeError) as exc:
+        log.warning("Could not download group screenshot (%s)", type(exc).__name__)
+        return None
+
+    try:
+        from PIL import Image
+        import pytesseract
+        return await asyncio.to_thread(_tesseract_ocr_bytes, image_bytes)
+    except ImportError:
+        log.warning("Screenshot OCR dependencies are missing; install Pillow, pytesseract, and Tesseract OCR")
+        return None
+    except Exception as exc:
+        log.warning("Local screenshot OCR failed (%s)", type(exc).__name__)
+        return None
+    return None
+
+
+def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
+    from PIL import Image
+    import pytesseract
+    configured_command = os.getenv("TESSERACT_CMD", "").strip()
+    if configured_command:
+        pytesseract.pytesseract.tesseract_cmd = configured_command
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        return pytesseract.image_to_string(image)
+
+
+async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not (getattr(message, "photo", None) or (
+        getattr(message, "document", None)
+        and str(getattr(message.document, "mime_type", "")).startswith("image/")
+    )):
+        return
+    bot_data = context.application.bot_data
+    key = (chat.id, message.message_id)
+    handled = bot_data.setdefault("handled_screenshot_messages", {})
+    now = time.monotonic()
+    handled = {item: stamp for item, stamp in handled.items() if now - stamp < 86400}
+    if key in handled:
+        return
+    handled[key] = now
+    bot_data["handled_screenshot_messages"] = handled
+
+    ocr_text = await _read_screenshot_text(message, context)
+    if not ocr_text:
+        await _reply_to_screenshot(
+            context, chat.id, message.message_id,
+            "Please upload a clearer screenshot so I can read the page heading and status.",
+        )
+        return
+    category = _classify_locked_screenshot(ocr_text)
+    if not category:
+        # A heading with no readable locking details is ambiguous; don't guess.
+        heading = re.sub(r"[^a-z]+", " ", ocr_text.casefold())
+        if re.search(r"\border\b|\bwithdraw(?:al)?\b", heading) and re.search(r"\blocking\b", heading):
+            await _reply_to_screenshot(
+                context, chat.id, message.message_id,
+                "Please upload a clearer screenshot so I can read the transaction details.",
+            )
+        return
+    templates = ORDER_IMAGE_REPLIES if category == "order" else WITHDRAWAL_IMAGE_REPLIES
+    user = update.effective_user
+    user_id = getattr(user, "id", None)
+    choice_key = f"screenshot_reply_choice:{chat.id}:{user_id or message.message_id}:{category}"
+    previous = bot_data.get(choice_key)
+    choices = [template for template in templates if template != previous]
+    selected = random.choice(choices or list(templates))
+    bot_data[choice_key] = selected
+    await _reply_to_screenshot(context, chat.id, message.message_id, selected)
+
+
+async def _reply_to_screenshot(context, chat_id: int, message_id: int, text: str) -> None:
+    """Send a reply that Telegram anchors to the uploaded screenshot."""
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=message_id,
+    )
+
+
 async def questions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
@@ -3629,6 +3760,10 @@ def build_application(
     application.add_handler(CommandHandler("qassign", qassign_command))
     application.add_handler(CommandHandler("dailyreport", dailyreport_command))
     application.add_handler(CommandHandler("unanswered", unanswered_command))
+    application.add_handler(
+        MessageHandler(filters.PHOTO | filters.Document.IMAGE, group_screenshot_handler),
+        group=-2,
+    )
     application.add_handler(
         MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.CAPTION, ai_reply),
         group=1,

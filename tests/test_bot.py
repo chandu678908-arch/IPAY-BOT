@@ -43,10 +43,167 @@ class BotTests(unittest.TestCase):
             bot.logging.getLogger("httpx").getEffectiveLevel(),
             bot.logging.WARNING,
         )
+
+    def test_locked_screenshot_classifier_uses_heading_and_locking_context(self):
+        # Visible text from the supplied Order reference screenshot.
+        self.assertEqual(
+            bot._classify_locked_screenshot(
+                "Order INR USDT Locking 11000.00 Income 418 (3.8%) Quota 11418.00 "
+                "Balance 10.51 Feedback received, waiting for processing"
+            ),
+            "order",
+        )
+        # Visible text from the supplied Withdrawal reference screenshot.
+        self.assertEqual(
+            bot._classify_locked_screenshot(
+                "Withdrawal Locking 100.00 Quota -100.00 Balance 27.4"
+            ),
+            "withdrawal",
+        )
+        self.assertIsNone(bot._classify_locked_screenshot("Locking 100 Quota 100"))
+        self.assertIsNone(bot._classify_locked_screenshot("Order completed 100"))
+
+    def test_locked_screenshot_templates_keep_category_specific_timing(self):
+        self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 7)
+        self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 7)
+        self.assertTrue(all("24 hours" in text for text in bot.ORDER_IMAGE_REPLIES))
+        self.assertTrue(all("24 hours" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
+
+    def test_tesseract_ocr_honors_configured_executable(self):
+        fake_pytesseract = SimpleNamespace(
+            pytesseract=SimpleNamespace(tesseract_cmd=""),
+            image_to_string=Mock(return_value="Order Locking 100 Quota 104"),
+        )
+        fake_image = MagicMock()
+        fake_image.__enter__.return_value = fake_image
+        fake_image.__exit__.return_value = False
+        with patch.dict("sys.modules", {
+            "PIL": SimpleNamespace(Image=SimpleNamespace(open=Mock(return_value=fake_image))),
+            "pytesseract": fake_pytesseract,
+        }), patch.dict("os.environ", {"TESSERACT_CMD": "/usr/bin/tesseract"}):
+            self.assertEqual(bot._tesseract_ocr_bytes(b"image"), "Order Locking 100 Quota 104")
+        self.assertEqual(fake_pytesseract.pytesseract.tesseract_cmd, "/usr/bin/tesseract")
+
+    def test_locked_screenshot_classifier_accepts_layout_variations(self):
+        order_variations = (
+            "Locking Order USDT 70 Quota 72 Balance 5",
+            "ORDER Locking income 4 commission quota 104 balance 10",
+            "Order INR locking amount 500 feedback received processing",
+        )
+        withdrawal_variations = (
+            "Locking Withdrawal 100 quota -100 balance 27",
+            "WITHDRAW withdrawal amount 250 locking quota 250",
+            "Withdrawal locking available balance 200 quota -50",
+        )
+        for text in order_variations:
+            self.assertEqual(bot._classify_locked_screenshot(text), "order")
+        for text in withdrawal_variations:
+            self.assertEqual(bot._classify_locked_screenshot(text), "withdrawal")
+
+    def test_every_screenshot_template_is_a_possible_random_choice(self):
+        for templates in (bot.ORDER_IMAGE_REPLIES, bot.WITHDRAWAL_IMAGE_REPLIES):
+            for template in templates:
+                with patch.object(bot.random, "choice", return_value=template) as choose:
+                    self.assertEqual(bot.random.choice(list(templates)), template)
+                    choose.assert_called_once()
+
+    def test_group_screenshot_handler_replies_once_and_varies_for_same_user(self):
+        async def scenario():
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={}),
+                bot=SimpleNamespace(send_message=AsyncMock()),
+            )
+            message = SimpleNamespace(
+                message_id=11,
+                photo=[SimpleNamespace(file_id="photo")],
+                document=None,
+            )
+            update = SimpleNamespace(
+                effective_message=message,
+                effective_chat=SimpleNamespace(id=-100, type="supergroup"),
+                effective_user=SimpleNamespace(id=5),
+            )
+            with patch.object(bot, "_read_screenshot_text", new=AsyncMock(
+                return_value="Order INR Locking 11000 Quota 11418"
+            )), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
+                await bot.group_screenshot_handler(update, context)
+                first = context.bot.send_message.await_args.kwargs["text"]
+                self.assertEqual(
+                    context.bot.send_message.await_args.kwargs["reply_to_message_id"],
+                    message.message_id,
+                )
+                await bot.group_screenshot_handler(update, context)
+                self.assertEqual(context.bot.send_message.await_count, 1)
+
+                message.message_id = 12
+                await bot.group_screenshot_handler(update, context)
+                second = context.bot.send_message.await_args.kwargs["text"]
+                self.assertNotEqual(first, second)
+
+        asyncio.run(scenario())
         self.assertGreaterEqual(
             bot.logging.getLogger("httpcore").getEffectiveLevel(),
             bot.logging.WARNING,
         )
+
+    def test_group_screenshot_handler_handles_unclear_unrelated_and_concurrent_uploads(self):
+        async def scenario():
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={}),
+                bot=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            def make_update(message_id, user_id, file_id):
+                return SimpleNamespace(
+                    effective_message=SimpleNamespace(
+                        message_id=message_id,
+                        photo=[SimpleNamespace(file_id=file_id)],
+                        document=None,
+                    ),
+                    effective_chat=SimpleNamespace(id=-100, type="supergroup"),
+                    effective_user=SimpleNamespace(id=user_id),
+                )
+
+            async def transcript(message, _context):
+                values = {
+                    "unclear": "",
+                    "unrelated": "Holiday photo at the beach",
+                    "order-a": "Order INR Locking 100 Quota 104 Balance 5",
+                    "withdrawal-a": "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "order-b": "Order USDT Locking 25 Quota 26 Balance 2",
+                    "withdrawal-b": "Withdraw Locking Amount 40 Quota -40 Balance 6",
+                }
+                await asyncio.sleep(0)
+                return values[message.photo[-1].file_id]
+
+            with patch.object(bot, "_read_screenshot_text", new=transcript):
+                unclear = make_update(21, 1, "unclear")
+                unrelated = make_update(22, 1, "unrelated")
+                await bot.group_screenshot_handler(unclear, context)
+                self.assertEqual(context.bot.send_message.await_count, 1)
+                self.assertEqual(
+                    context.bot.send_message.await_args.kwargs["reply_to_message_id"], 21
+                )
+                await bot.group_screenshot_handler(unrelated, context)
+                self.assertEqual(context.bot.send_message.await_count, 1)
+
+                uploads = [
+                    make_update(23, 2, "order-a"),
+                    make_update(24, 3, "withdrawal-a"),
+                    make_update(25, 4, "order-b"),
+                    make_update(26, 5, "withdrawal-b"),
+                ]
+                await asyncio.gather(*[
+                    bot.group_screenshot_handler(update, context) for update in uploads
+                ])
+                self.assertEqual(context.bot.send_message.await_count, 5)
+                reply_ids = {
+                    call.kwargs["reply_to_message_id"]
+                    for call in context.bot.send_message.await_args_list
+                }
+                self.assertEqual(reply_ids, {21, 23, 24, 25, 26})
+
+        asyncio.run(scenario())
 
     def test_conflict_error_handler_stops_polling_cleanly(self):
         application = SimpleNamespace(stop_running=Mock())
