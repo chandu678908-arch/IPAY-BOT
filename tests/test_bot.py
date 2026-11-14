@@ -3,12 +3,14 @@ import shutil
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import uuid
 
 import pymupdf
+from telegram import Chat, Document, Message, PhotoSize, Update
 from telegram.error import BadRequest, Conflict
 from telegram.ext import CommandHandler, MessageHandler
 
@@ -211,6 +213,39 @@ class BotTests(unittest.TestCase):
                 self.assertIsNone(await bot._read_screenshot_text(message, context))
             self.assertTrue(any("RuntimeError" in line for line in logs.output))
             self.assertNotIn("private-image-data", "\n".join(logs.output))
+
+        asyncio.run(scenario())
+
+    def test_screenshot_ocr_logs_stages_without_logging_image_or_ocr_content(self):
+        async def scenario():
+            download = SimpleNamespace(
+                download_as_bytearray=AsyncMock(return_value=b"private-image-data")
+            )
+            context = SimpleNamespace(
+                bot=SimpleNamespace(get_file=AsyncMock(return_value=download))
+            )
+            message = SimpleNamespace(
+                message_id=42,
+                photo=[SimpleNamespace(file_id="photo")],
+                document=None,
+            )
+            with patch.dict("sys.modules", {
+                "PIL": SimpleNamespace(Image=object()),
+                "pytesseract": SimpleNamespace(),
+            }), patch.object(
+                bot.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value="Withdrawal Locking private-ocr-text"),
+            ), self.assertLogs("ipay-bot", level="INFO") as logs:
+                text = await bot._read_screenshot_text(message, context)
+
+            self.assertEqual(text, "Withdrawal Locking private-ocr-text")
+            output = "\n".join(logs.output)
+            self.assertIn("IMAGE DOWNLOADED", output)
+            self.assertIn("OCR STARTED", output)
+            self.assertIn("OCR COMPLETED", output)
+            self.assertNotIn("private-image-data", output)
+            self.assertNotIn("private-ocr-text", output)
 
         asyncio.run(scenario())
 
@@ -651,6 +686,39 @@ class BotTests(unittest.TestCase):
         ]
         self.assertEqual(len(screenshot_handlers), 1)
         self.assertEqual(screenshot_handlers[0].callback, bot.group_screenshot_handler)
+        photo_update = Update(
+            update_id=1,
+            message=Message(
+                message_id=1,
+                date=datetime.now(timezone.utc),
+                chat=Chat(id=-100, type="supergroup"),
+                photo=[
+                    PhotoSize(
+                        file_id="photo-id",
+                        file_unique_id="photo-unique-id",
+                        width=1,
+                        height=1,
+                    )
+                ],
+            ),
+        )
+        document_update = Update(
+            update_id=2,
+            message=Message(
+                message_id=2,
+                date=datetime.now(timezone.utc),
+                chat=Chat(id=-100, type="supergroup"),
+                document=Document(
+                    file_id="document-id",
+                    file_unique_id="document-unique-id",
+                    file_size=1,
+                    file_name="image.png",
+                    mime_type="image/png",
+                ),
+            )
+        )
+        self.assertTrue(screenshot_handlers[0].filters.check_update(photo_update))
+        self.assertTrue(screenshot_handlers[0].filters.check_update(document_update))
         self.assertEqual(application.handlers[1][0].callback, bot.ai_reply)
         self.assertEqual(application.handlers[-1][0].callback, bot.activity_handler)
 

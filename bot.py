@@ -1349,6 +1349,21 @@ async def activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     if not message or not chat:
         return
+    image_document = getattr(message, "document", None)
+    if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        if getattr(message, "photo", None):
+            media_type = "photo"
+        elif image_document and str(getattr(image_document, "mime_type", "")).startswith("image/"):
+            media_type = "image document"
+        else:
+            media_type = None
+        if media_type:
+            log.info(
+                "GROUP MESSAGE RECEIVED (chat_id=%s, message_id=%s, media=%s)",
+                chat.id,
+                message.message_id,
+                media_type,
+            )
     try:
         store = _question_store()
         await asyncio.to_thread(
@@ -1408,20 +1423,44 @@ async def _read_screenshot_text(message, context) -> Optional[str]:
         telegram_file = await context.bot.get_file(file_obj.file_id)
         image_bytes = bytes(await telegram_file.download_as_bytearray())
     except Exception as exc:
-        log.warning("Could not download group screenshot (%s)", type(exc).__name__)
+        log.warning(
+            "IMAGE DOWNLOAD FAILED (message_id=%s, error=%s)",
+            getattr(message, "message_id", None),
+            type(exc).__name__,
+        )
         return None
+    log.info(
+        "IMAGE DOWNLOADED (message_id=%s, bytes=%s)",
+        getattr(message, "message_id", None),
+        len(image_bytes),
+    )
 
     try:
         from PIL import Image  # noqa: F401
         import pytesseract
-        return await asyncio.to_thread(_tesseract_ocr_bytes, image_bytes)
     except ImportError:
-        log.warning("Screenshot OCR dependencies are missing; install Pillow, pytesseract, and Tesseract OCR")
+        log.warning(
+            "OCR START FAILED (message_id=%s, dependencies_missing=true)",
+            getattr(message, "message_id", None),
+        )
         return None
+
+    log.info("OCR STARTED (message_id=%s)", getattr(message, "message_id", None))
+    try:
+        text = await asyncio.to_thread(_tesseract_ocr_bytes, image_bytes)
     except Exception as exc:
-        log.warning("Local screenshot OCR failed (%s)", type(exc).__name__)
+        log.warning(
+            "OCR FAILED (message_id=%s, error=%s)",
+            getattr(message, "message_id", None),
+            type(exc).__name__,
+        )
         return None
-    return None
+    log.info(
+        "OCR COMPLETED (message_id=%s, characters=%s)",
+        getattr(message, "message_id", None),
+        len(text),
+    )
+    return text
 
 
 def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
@@ -1462,7 +1501,14 @@ def _claim_screenshot_reply(chat_id: int, message_id: int) -> bool:
 async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
-    if not message or not chat or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+    if not message or not chat:
+        return
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        log.info(
+            "Ignoring screenshot outside a group (chat_type=%s, message_id=%s)",
+            chat.type,
+            message.message_id,
+        )
         return
     if not (getattr(message, "photo", None) or (
         getattr(message, "document", None)
@@ -1471,7 +1517,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         return
     media_type = "photo" if getattr(message, "photo", None) else "image document"
     log.info(
-        "Received group screenshot (chat_id=%s, message_id=%s, media=%s)",
+        "PHOTO DETECTED (chat_id=%s, message_id=%s, media=%s)",
         chat.id,
         message.message_id,
         media_type,
@@ -1479,21 +1525,24 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
 
     ocr_text = await _read_screenshot_text(message, context)
     if not ocr_text:
+        log.info(
+            "CLASSIFICATION RESULT (message_id=%s, category=none, reason=no_ocr_text)",
+            message.message_id,
+        )
         return
     category = _classify_locked_screenshot(ocr_text)
     if not category:
         log.info(
-            "Group screenshot was not a clear locked order or withdrawal "
-            "(chat_id=%s, message_id=%s)",
+            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, category=none)",
             chat.id,
             message.message_id,
         )
         return
     log.info(
-        "Classified group screenshot as %s (chat_id=%s, message_id=%s)",
-        category,
+        "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, category=%s)",
         chat.id,
         message.message_id,
+        category,
     )
     try:
         claimed = await asyncio.to_thread(
