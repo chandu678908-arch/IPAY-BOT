@@ -224,70 +224,97 @@ class BotTests(unittest.TestCase):
             bot.logging.WARNING,
         )
 
-    def test_withdrawal_pending_reply_uses_random_template_and_deduplicates(self):
+    def test_concurrent_pending_uploads_are_replied_once_and_anchored_correctly(self):
         async def scenario():
             context = SimpleNamespace(
                 application=SimpleNamespace(bot_data={}),
                 bot=SimpleNamespace(send_message=AsyncMock()),
             )
-            message = SimpleNamespace(
-                message_id=71,
-                photo=[SimpleNamespace(file_id="pending-photo")],
-                document=None,
-            )
-            update = SimpleNamespace(
-                effective_message=message,
-                effective_chat=SimpleNamespace(id=-100, type="supergroup"),
-                effective_user=SimpleNamespace(id=12),
-            )
-            reference_ocr = (
-                "Withdrawal 07/11/2026 13/11/2026 Pending "
-                "MobiKwik 200.00 Pending Quota Rs 200.00 Balance Rs 36.22"
-            )
+
+            def make_update(message_id, file_id, media_type):
+                message = SimpleNamespace(
+                    message_id=message_id,
+                    photo=(
+                        [SimpleNamespace(file_id=file_id)]
+                        if media_type == "photo"
+                        else []
+                    ),
+                    document=(
+                        SimpleNamespace(file_id=file_id, mime_type="image/png")
+                        if media_type == "document"
+                        else None
+                    ),
+                )
+                return SimpleNamespace(
+                    effective_message=message,
+                    effective_chat=SimpleNamespace(id=-100, type="supergroup"),
+                    effective_user=SimpleNamespace(id=12),
+                )
+
+            updates = [
+                make_update(71, "pending-photo-a", "photo"),
+                make_update(72, "pending-document-b", "document"),
+                make_update(73, "order-photo", "photo"),
+                make_update(71, "pending-photo-a", "photo"),
+            ]
+            transcripts = {
+                "pending-photo-a": (
+                    "Withdrawal 07/11/2026 Pending MobiKwik 200.00 "
+                    "Quota Rs 200.00 Balance Rs 36.22"
+                ),
+                "pending-document-b": (
+                    "Withdrawal Pending transaction 100.00 "
+                    "Quota Rs 100 Balance Rs 236"
+                ),
+                "order-photo": "Order INR Locking 100 Quota 104 Balance 5",
+            }
+            delays = {
+                "pending-photo-a": 0.02,
+                "pending-document-b": 0.01,
+                "order-photo": 0,
+            }
+
+            async def read_ocr(message, _context):
+                file_id = (
+                    message.photo[-1].file_id
+                    if message.photo
+                    else message.document.file_id
+                )
+                await asyncio.sleep(delays[file_id])
+                return transcripts[file_id]
+
             with patch.object(
                 bot,
                 "_read_screenshot_text",
-                new=AsyncMock(return_value=reference_ocr),
+                new=read_ocr,
             ), patch.object(
                 bot.random,
                 "choice",
                 side_effect=lambda choices: choices[0],
             ):
                 await asyncio.gather(
-                    bot.group_screenshot_handler(update, context),
-                    bot.group_screenshot_handler(update, context),
+                    *(
+                        bot.group_screenshot_handler(update, context)
+                        for update in updates
+                    )
                 )
-                self.assertEqual(context.bot.send_message.await_count, 1)
-                first_reply = context.bot.send_message.await_args.kwargs
-                self.assertEqual(
-                    first_reply["reply_to_message_id"],
-                    message.message_id,
-                )
-                self.assertIn(
-                    first_reply["text"],
-                    bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
-                )
+                self.assertEqual(context.bot.send_message.await_count, 3)
+                replies = {}
+                for call in context.bot.send_message.await_args_list:
+                    message_id = call.kwargs["reply_to_message_id"]
+                    self.assertNotIn(message_id, replies)
+                    replies[message_id] = call.kwargs["text"]
 
-                message.message_id = 72
-                message.photo = []
-                message.document = SimpleNamespace(
-                    file_id="pending-document",
-                    mime_type="image/png",
-                )
-                await bot.group_screenshot_handler(update, context)
-                self.assertEqual(context.bot.send_message.await_count, 2)
-                second_reply = context.bot.send_message.await_args.kwargs
-                self.assertEqual(second_reply["reply_to_message_id"], 72)
-                self.assertIn(
-                    second_reply["text"],
-                    bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
-                )
-                self.assertNotEqual(first_reply["text"], second_reply["text"])
+                self.assertEqual(set(replies), {71, 72, 73})
+                self.assertIn(replies[71], bot.WITHDRAWAL_PENDING_IMAGE_REPLIES)
+                self.assertIn(replies[72], bot.WITHDRAWAL_PENDING_IMAGE_REPLIES)
+                self.assertIn(replies[73], bot.ORDER_IMAGE_REPLIES)
+                self.assertNotEqual(replies[71], replies[72])
 
         with patch.object(
             bot,
             "DB_PATH",
-            self.root / "withdrawal-pending-replies.sqlite3",
+            self.root / "concurrent-withdrawal-pending.sqlite3",
         ):
             asyncio.run(scenario())
 
@@ -791,7 +818,7 @@ class BotTests(unittest.TestCase):
         }
         self.assertEqual(
             commands,
-            {"start", *bot.BOOST_COMMANDS, "questions", "qsearch", "qstatus", "qnote", "qresolve", "qshow", "qhistory", "qassign", "dailyreport", "unanswered"},
+            {"start", "hi", *bot.BOOST_COMMANDS, "questions", "qsearch", "qstatus", "qnote", "qresolve", "qshow", "qhistory", "qassign", "dailyreport", "unanswered"},
         )
         boost_handlers = [
             handler
@@ -808,7 +835,7 @@ class BotTests(unittest.TestCase):
         ]
         self.assertEqual(len(caption_handlers), 1)
         self.assertEqual(caption_handlers[0].callback, bot.boost_caption_handler)
-        self.assertEqual(len(application.handlers[0]), 14)
+        self.assertEqual(len(application.handlers[0]), 15)
         screenshot_handlers = [
             handler
             for handler in application.handlers[-2]
@@ -945,6 +972,7 @@ class BotTests(unittest.TestCase):
         )
         commands = [
             bot.start,
+            bot.hi_command,
             bot.help_command,
             bot.boost_command,
             bot.uid_command,
@@ -2928,6 +2956,58 @@ class BotTests(unittest.TestCase):
     def test_resolve_timezone_supports_asia_kolkata(self):
         tz = bot.resolve_timezone("Asia/Kolkata")
         self.assertIsNotNone(tz)
+
+    def test_hi_command_in_private_chat(self):
+        message = SimpleNamespace(text="/hi", message_id=1001, reply_text=AsyncMock())
+        chat = SimpleNamespace(id=12345, type=bot.ChatType.PRIVATE)
+        update = SimpleNamespace(effective_message=message, effective_chat=chat)
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
+        asyncio.run(bot.hi_command(update, context))
+        message.reply_text.assert_awaited_once_with(
+            "👋 Hi! Welcome to iPAY Support.\n\n"
+            "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
+        )
+
+    def test_hi_command_in_group_chat(self):
+        message = SimpleNamespace(text="/hi", message_id=1002, reply_text=AsyncMock())
+        chat = SimpleNamespace(id=-1009876, type=bot.ChatType.SUPERGROUP)
+        update = SimpleNamespace(effective_message=message, effective_chat=chat)
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
+        asyncio.run(bot.hi_command(update, context))
+        message.reply_text.assert_awaited_once_with(
+            "👋 Hi! Welcome to iPAY Support.\n\n"
+            "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
+        )
+
+    def test_hi_command_avoids_duplicate_replies(self):
+        message = SimpleNamespace(text="/hi", message_id=2001, reply_text=AsyncMock())
+        chat = SimpleNamespace(id=55555, type=bot.ChatType.PRIVATE)
+        update = SimpleNamespace(effective_message=message, effective_chat=chat)
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
+        # First call should reply
+        asyncio.run(bot.hi_command(update, context))
+        self.assertEqual(message.reply_text.await_count, 1)
+        # Duplicate call with identical chat_id and message_id should be ignored
+        asyncio.run(bot.hi_command(update, context))
+        self.assertEqual(message.reply_text.await_count, 1)
+        # Different message_id should be replied to
+        new_message = SimpleNamespace(text="/hi", message_id=2002, reply_text=AsyncMock())
+        new_update = SimpleNamespace(effective_message=new_message, effective_chat=chat)
+        asyncio.run(bot.hi_command(new_update, context))
+        self.assertEqual(new_message.reply_text.await_count, 1)
+
+    def test_ordinary_message_containing_hi_does_not_trigger_hi_command(self):
+        handler = CommandHandler("hi", bot.hi_command)
+        for non_command_text in ("hi", "Hi", "hi there", "say hi", "which bank hi"):
+            msg = Message(
+                message_id=3001,
+                date=datetime.now(timezone.utc),
+                chat=Chat(id=100, type="private"),
+                text=non_command_text,
+            )
+            upd = Update(update_id=3001, message=msg)
+            # CommandHandler must NOT match ordinary text without leading /
+            self.assertFalse(handler.check_update(upd))
 
 
 if __name__ == "__main__":

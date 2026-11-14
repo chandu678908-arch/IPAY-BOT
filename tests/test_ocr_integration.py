@@ -1,7 +1,9 @@
 import os
+import re
 import shutil
 import unittest
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -36,25 +38,28 @@ class TesseractIntegrationTests(unittest.TestCase):
 
         self.assertEqual(bot._classify_locked_screenshot(text), "order")
 
-    def test_tesseract_ocr_classifies_withdrawal_pending_reference_text(self):
+    def test_tesseract_ocr_classifies_withdrawal_pending_reference_screenshot(self):
         self._tesseract_command()
 
-        image = Image.new("RGB", (640, 160), "white")
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-        draw.text((12, 16), "WITHDRAWAL", font=font, fill="black")
-        draw.text(
-            (12, 62),
-            "PENDING  QUOTA 200  BALANCE 36",
-            font=font,
-            fill="black",
+        reference_path = os.getenv("WITHDRAWAL_PENDING_REFERENCE_IMAGE", "").strip()
+        image_path = (
+            Path(reference_path)
+            if reference_path
+            else Path(__file__).parent
+            / "fixtures"
+            / "withdrawal_pending_reference_redacted.png"
         )
-        image = image.resize((1920, 480), Image.Resampling.NEAREST)
-        image_bytes = BytesIO()
-        image.save(image_bytes, format="PNG")
-
-        text = bot._tesseract_ocr_bytes(image_bytes.getvalue())
-
+        self.assertTrue(image_path.is_file(), "Withdrawal Pending reference image is missing")
+        text = bot._tesseract_ocr_bytes(image_path.read_bytes())
+        normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+        self.assertTrue(
+            re.search(r"\bwithdraw(?:al)?\b", normalized),
+            "Tesseract did not recognize the Withdrawal heading",
+        )
+        self.assertTrue(
+            re.search(r"\bpending\b", normalized),
+            "Tesseract did not recognize the Pending status",
+        )
         self.assertEqual(bot._classify_screenshot(text), "withdrawal_pending")
 
 
