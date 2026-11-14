@@ -6,6 +6,8 @@ tests
 !tests/
 tests/*
 !tests/test_ocr_integration.py
+!tests/fixtures/
+!tests/fixtures/withdrawal_pending_reference_redacted.png
 *.pyc
 *.pyo
 *.log
