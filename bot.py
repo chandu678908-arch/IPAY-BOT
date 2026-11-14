@@ -176,6 +176,13 @@ _DB_SCHEMA_LOCK = threading.Lock()
 _DB_INITIALIZED_PATHS: set[str] = set()
 _SUPABASE_CLIENT = None
 _SUPABASE_CLIENT_LOCK = threading.Lock()
+_PROCESSED_HI_MESSAGES: Dict[Tuple[int, int], float] = {}
+_PROCESSED_HI_LOCK = threading.Lock()
+
+HI_RESPONSE = (
+    "👋 Hi! Welcome to iPAY Support.\n\n"
+    "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
+)
 
 WELCOME = (
     "WELCOME TO iPAY ⚡\n\n"
@@ -1273,6 +1280,34 @@ async def _send_home_message(message) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _remember_menu_page(context, update, "nav:menu")
     await _send_home_message(update.effective_message)
+
+
+async def hi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply to /hi command in private chats and groups."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat:
+        return
+
+    message_id = getattr(message, "message_id", None)
+    if message_id is not None:
+        application = getattr(context, "application", None)
+        bot_data = getattr(application, "bot_data", None) if application else getattr(context, "bot_data", None)
+        now = time.monotonic()
+        with _PROCESSED_HI_LOCK:
+            if isinstance(bot_data, dict):
+                processed = bot_data.setdefault("processed_hi_messages", {})
+            else:
+                processed = _PROCESSED_HI_MESSAGES
+            for key, timestamp in list(processed.items()):
+                if now - timestamp >= 180:
+                    processed.pop(key, None)
+            message_key = (chat.id, message_id)
+            if message_key in processed:
+                return
+            processed[message_key] = now
+
+    await message.reply_text(HI_RESPONSE)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3908,6 +3943,7 @@ def build_application(
             api_key=os.getenv("OPENAI_API_KEY", "").strip(), timeout=45.0
         )
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("hi", hi_command))
     application.add_handler(CommandHandler(BOOST_COMMANDS, boost_command))
     application.add_handler(MessageHandler(filters.CAPTION, boost_caption_handler))
     application.add_handler(CommandHandler("questions", questions_command))
