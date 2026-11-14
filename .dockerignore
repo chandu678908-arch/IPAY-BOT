@@ -7,4 +7,5 @@ tests
 *.pyo
 *.log
 .env
+chandu.txt
 ipay_bot.sqlite3
