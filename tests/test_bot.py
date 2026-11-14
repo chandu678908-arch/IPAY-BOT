@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 import tempfile
 import unittest
@@ -2273,6 +2274,156 @@ class BotTests(unittest.TestCase):
         self.assertIn("same language", messages[0]["content"])
         self.assertIn("untrusted input", messages[0]["content"])
 
+    def test_gemini_streams_chat_response_and_takes_priority(self):
+        async def response_stream():
+            yield SimpleNamespace(text="Check the linked wallet ")
+            yield SimpleNamespace(text="status in the app.")
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        openai_create = AsyncMock()
+        openai_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=openai_create)
+            )
+        )
+        streamed_updates = []
+
+        async def record_update(answer):
+            streamed_updates.append(answer)
+
+        with (
+            patch.object(bot, "DB_PATH", self.root / "gemini-history.sqlite3"),
+            patch.object(bot, "GEMINI_MODEL", "test-gemini-model"),
+        ):
+            answer, pages = asyncio.run(
+                bot._ai_answer(
+                    "How do I check my wallet?",
+                    42,
+                    self.make_guide(),
+                    openai_client,
+                    record_update,
+                    gemini_client=gemini_client,
+                )
+            )
+
+        self.assertEqual(answer, "Check the linked wallet status in the app.")
+        self.assertTrue(pages)
+        self.assertEqual(
+            streamed_updates,
+            [
+                "Check the linked wallet ",
+                "Check the linked wallet status in the app.",
+            ],
+        )
+        self.assertEqual(
+            generate.await_args.kwargs["model"], "test-gemini-model"
+        )
+        self.assertTrue(generate.await_args.kwargs["config"].system_instruction)
+        self.assertFalse(openai_create.await_count)
+
+    def test_gemini_timeout_falls_back_to_openai_chat(self):
+        async def response_stream():
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="Use the account menu.")
+                    )
+                ]
+            )
+
+        async def slow_gemini_request(**_kwargs):
+            await asyncio.sleep(0.05)
+            return response_stream()
+
+        generate = AsyncMock(side_effect=slow_gemini_request)
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        openai_create = AsyncMock(return_value=response_stream())
+        openai_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=openai_create)
+            )
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "gemini-timeout.sqlite3"),
+            patch.object(bot, "AI_TIMEOUT_SECONDS", 0.01),
+        ):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Where can I find account settings?",
+                    42,
+                    self.make_guide(),
+                    openai_client,
+                    gemini_client=gemini_client,
+                )
+            )
+
+        self.assertEqual(answer, "Use the account menu.")
+        openai_create.assert_awaited_once()
+
+    def test_build_application_configures_gemini_without_logging_key(self):
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(aclose=AsyncMock()),
+            close=Mock(),
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"GEMINI_API_KEY": "test-key-not-for-logging", "OPENAI_API_KEY": ""},
+                clear=False,
+            ),
+            patch.object(bot.genai, "Client", return_value=gemini_client) as client_factory,
+        ):
+            with self.assertLogs("ipay-bot", level="INFO") as log_output:
+                application = bot.build_application(
+                    "dummy-telegram-token-for-tests",
+                    guide=self.make_guide(),
+                )
+
+        self.assertIs(application.bot_data["gemini_client"], gemini_client)
+        self.assertNotIn("test-key-not-for-logging", "\n".join(log_output.output))
+        http_options = client_factory.call_args.kwargs["http_options"]
+        self.assertEqual(http_options.timeout, int(bot.AI_TIMEOUT_SECONDS * 1000))
+        self.assertEqual(http_options.retry_options.attempts, 2)
+        self.assertEqual(
+            http_options.retry_options.http_status_codes,
+            [408, 500, 502, 503, 504],
+        )
+        asyncio.run(bot._post_shutdown(application))
+        gemini_client.aio.aclose.assert_awaited_once()
+        gemini_client.close.assert_called_once()
+
+    def test_ai_reply_does_not_send_image_captions_to_ai(self):
+        message = SimpleNamespace(
+            text=None,
+            caption="My withdrawal is delayed",
+            photo=[object()],
+            reply_text=AsyncMock(),
+            message_id=987,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=42),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={"guide": self.make_guide(), "ai_client": object()}
+            )
+        )
+        with patch.object(bot, "_ai_answer", new=AsyncMock()) as ai_answer:
+            asyncio.run(bot.ai_reply(update, context))
+        ai_answer.assert_not_awaited()
+        message.reply_text.assert_not_awaited()
+
     def test_admin_faq_is_used_as_retrievable_answer_and_can_be_removed(self):
         db_path = self.root / "faqs.sqlite3"
         with patch.object(bot, "DB_PATH", db_path):
@@ -2365,6 +2516,39 @@ class BotTests(unittest.TestCase):
             ["user", "assistant"],
         )
         self.assertEqual(history[-1]["content"], "Check your receiving limit.")
+
+    def test_ask_command_uses_configured_gemini_chat_provider(self):
+        gemini_client = object()
+        message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=77),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=77),
+        )
+        context = SimpleNamespace(
+            args=["How", "do", "I", "check", "my", "wallet?"],
+            application=SimpleNamespace(
+                bot_data={
+                    "guide": self.make_guide(),
+                    "gemini_client": gemini_client,
+                }
+            ),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "ask-gemini.sqlite3"),
+            patch.object(
+                bot,
+                "_ai_answer",
+                new=AsyncMock(return_value=("Open the wallet page.", [])),
+            ) as ai_answer,
+        ):
+            asyncio.run(bot.ask_command(update, context))
+
+        self.assertIs(
+            ai_answer.await_args.kwargs["gemini_client"],
+            gemini_client,
+        )
+        message.reply_text.assert_awaited_once()
 
     def test_report_user_text_is_sent_without_telegram_markdown_parsing(self):
         message = SimpleNamespace(

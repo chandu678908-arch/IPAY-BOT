@@ -22,6 +22,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 from openai import AsyncOpenAI
 from telegram import (
     BotCommand,
@@ -73,6 +76,13 @@ def _asset_path(value: str) -> Path:
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+AI_ENABLED = os.getenv("AI_ENABLED", "true").strip().casefold() not in {
+    "0", "false", "no", "off",
+}
+AI_MAX_OUTPUT_TOKENS = max(1, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "300")))
+AI_TIMEOUT_SECONDS = max(1.0, float(os.getenv("AI_TIMEOUT_SECONDS", "45")))
 SUPPORT_1 = os.getenv("SUPPORT_1", "@Ipay800").strip()
 SUPPORT_2 = os.getenv("SUPPORT_2", "@Roas668").strip()
 SUPPORT_3 = os.getenv("SUPPORT_3", "@Ipay811").strip()
@@ -3041,7 +3051,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     chat = getattr(update, "effective_chat", None)
-    if get_setting("ai_enabled", "on") == "off" or (
+    if not AI_ENABLED or get_setting("ai_enabled", "on") == "off" or (
         chat
         and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
         and get_setting(f"ai_group:{chat.id}", "on") == "off"
@@ -3065,6 +3075,9 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     guide: Guide = context.application.bot_data["guide"]
     ai_client: Optional[AsyncOpenAI] = context.application.bot_data.get("ai_client")
+    gemini_client: Optional[genai.Client] = context.application.bot_data.get(
+        "gemini_client"
+    )
     if chat and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         chat_id = _group_conversation_id(
             chat.id, user.id if user else None, getattr(message, "message_id", 0)
@@ -3073,9 +3086,14 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chat_id = chat.id if chat else 0
     try:
         answer, pages = await _ai_answer(
-            question, chat_id, guide, ai_client, enabled_languages=_enabled_languages()
+            question,
+            chat_id,
+            guide,
+            ai_client,
+            enabled_languages=_enabled_languages(),
+            gemini_client=gemini_client,
         )
-        if ai_client is not None:
+        if ai_client is not None or gemini_client is not None:
             add_message(chat_id, "user", question)
             add_message(chat_id, "assistant", answer)
         if pages and pages[0].image_path:
@@ -4085,6 +4103,54 @@ def _matching_custom_faqs(question: str) -> List[Dict[str, Any]]:
     ][:3]
 
 
+async def _gemini_answer(
+    gemini_client: genai.Client,
+    system_content: str,
+    history: List[Dict[str, str]],
+    question: str,
+    on_update: Optional[Callable[[str], Awaitable[None]]] = None,
+) -> str:
+    contents: List[Dict[str, Any]] = []
+    for item in history:
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content:
+            continue
+        gemini_role = "model" if role == "assistant" else "user"
+        if contents and contents[-1]["role"] == gemini_role:
+            contents[-1]["parts"][0]["text"] += "\n" + content
+        else:
+            contents.append(
+                {"role": gemini_role, "parts": [{"text": content}]}
+            )
+    if contents and contents[-1]["role"] == "user":
+        contents[-1]["parts"][0]["text"] += "\n" + question[:2000]
+    else:
+        contents.append(
+            {"role": "user", "parts": [{"text": question[:2000]}]}
+        )
+
+    async def collect_response() -> str:
+        stream = await gemini_client.aio.models.generate_content_stream(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_content,
+                max_output_tokens=AI_MAX_OUTPUT_TOKENS,
+            ),
+        )
+        answer_parts: List[str] = []
+        async for chunk in stream:
+            content = getattr(chunk, "text", None)
+            if content:
+                answer_parts.append(content)
+                if on_update:
+                    await on_update("".join(answer_parts))
+        return "".join(answer_parts).strip()
+
+    return await asyncio.wait_for(collect_response(), timeout=AI_TIMEOUT_SECONDS)
+
+
 async def _ai_answer(
     question: str,
     chat_id: int,
@@ -4093,6 +4159,7 @@ async def _ai_answer(
     on_update: Optional[Callable[[str], Awaitable[None]]] = None,
     enabled_languages: Optional[List[str]] = None,
     pre_retrieved_pages: Optional[List[GuidePage]] = None,
+    gemini_client: Optional[genai.Client] = None,
 ) -> Tuple[str, List[GuidePage]]:
     pages = (
         pre_retrieved_pages
@@ -4102,7 +4169,7 @@ async def _ai_answer(
     custom_faqs = _matching_custom_faqs(question)
     if not pages and not custom_faqs:
         record_unanswered_question(question)
-    if ai_client is None:
+    if ai_client is None and gemini_client is None:
         if custom_faqs:
             return (
                 "\n\n".join(f"{entry['title']}\n{entry['answer']}" for entry in custom_faqs),
@@ -4136,6 +4203,34 @@ async def _ai_answer(
             "and say that language is currently unavailable."
         )
     history = get_history(chat_id)[-6:]
+    if gemini_client is not None:
+        try:
+            answer = await _gemini_answer(
+                gemini_client,
+                system_content,
+                history,
+                question,
+                on_update,
+            )
+            if answer:
+                return answer, pages
+            log.warning("Gemini returned an empty chat response")
+        except (genai_errors.APIError, TimeoutError) as exc:
+            log.error(
+                "Gemini chat request failed (%s, HTTP %s)",
+                type(exc).__name__,
+                getattr(exc, "code", "unknown"),
+            )
+            if ai_client is None:
+                raise
+            log.warning("Using OpenAI chat fallback after Gemini request failure")
+        if ai_client is None:
+            return (
+                "I couldn't prepare a reliable answer from the guide. "
+                f"Please contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}.",
+                pages,
+            )
+
     response = await ai_client.chat.completions.create(
         model=AI_MODEL,
         messages=[
@@ -4147,7 +4242,7 @@ async def _ai_answer(
             {"role": "user", "content": question[:2000]},
         ],
         temperature=0.2,
-        max_tokens=300,
+        max_tokens=AI_MAX_OUTPUT_TOKENS,
         stream=True,
     )
     answer_parts = []
@@ -4208,6 +4303,12 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message_text = (getattr(message, "text", None) or getattr(message, "caption", None)) if message else None
     if not message or not message_text or not chat:
         return
+    document = getattr(message, "document", None)
+    if getattr(message, "photo", None) or (
+        document
+        and str(getattr(document, "mime_type", "")).startswith("image/")
+    ):
+        return
 
     is_group = chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
     if chat.type != ChatType.PRIVATE and not is_group:
@@ -4254,7 +4355,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not pre_retrieved_pages:
             return
 
-    if get_setting("ai_enabled", "on") == "off":
+    if not AI_ENABLED or get_setting("ai_enabled", "on") == "off":
         return
     if is_group and get_setting(f"ai_group:{chat.id}", "on") == "off":
         return
@@ -4322,6 +4423,9 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     ai_client: Optional[AsyncOpenAI] = context.application.bot_data.get("ai_client")
+    gemini_client: Optional[genai.Client] = context.application.bot_data.get(
+        "gemini_client"
+    )
     conversation_id = (
         _group_conversation_id(
             chat.id,
@@ -4347,6 +4451,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             None,
             _enabled_languages(),
             pre_retrieved_pages,
+            gemini_client=gemini_client,
         )
         if chat_action_task:
             try:
@@ -4402,6 +4507,13 @@ async def _post_init(application: Application) -> None:
                 scope.type,
                 type(exc).__name__,
             )
+
+
+async def _post_shutdown(application: Application) -> None:
+    gemini_client: Optional[genai.Client] = application.bot_data.get("gemini_client")
+    if gemini_client:
+        await gemini_client.aio.aclose()
+        gemini_client.close()
 
 
 def create_guide() -> Guide:
@@ -4468,13 +4580,35 @@ def build_application(
             )
         )
         .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
         .build()
     )
     application.bot_data["guide"] = guide or create_guide()
-    if os.getenv("OPENAI_API_KEY", "").strip():
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if openai_api_key:
         application.bot_data["ai_client"] = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY", "").strip(), timeout=45.0
+            api_key=openai_api_key, timeout=AI_TIMEOUT_SECONDS
         )
+        log.info("OpenAI question classification is configured")
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if gemini_api_key:
+        application.bot_data["gemini_client"] = genai.Client(
+            api_key=gemini_api_key,
+            http_options=genai_types.HttpOptions(
+                timeout=int(AI_TIMEOUT_SECONDS * 1000),
+                retry_options=genai_types.HttpRetryOptions(
+                    attempts=2,
+                    initial_delay=0.5,
+                    max_delay=2.0,
+                    http_status_codes=[408, 500, 502, 503, 504],
+                ),
+            ),
+        )
+        log.info("Gemini chat replies are configured (model=%s)", GEMINI_MODEL)
+    elif not openai_api_key:
+        log.info("No hosted AI provider configured; local guide and FAQ replies remain available")
+    if not AI_ENABLED:
+        log.info("AI-generated chat replies are disabled by AI_ENABLED")
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("hi", hi_command))
     application.add_handler(CommandHandler(BOOST_COMMANDS, boost_command))

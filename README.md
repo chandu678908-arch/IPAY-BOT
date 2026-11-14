@@ -1,14 +1,15 @@
 # iPay Telegram Support Bot
 
-This repository contains the existing `python-telegram-bot` polling bot, iPay guide/FAQ replies, `/boost` flow, and an additive question-intelligence and reporting system. The bot uses Supabase when `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are set, and SQLite for local development otherwise. OpenAI is optional: when `OPENAI_API_KEY` is set, it powers conversational answers and multilingual question classification. Classification falls back to deterministic local rules if the API is unset or unavailable.
+This repository contains the existing `python-telegram-bot` polling bot, iPay guide/FAQ replies, `/boost` flow, and an additive question-intelligence and reporting system. The bot uses Supabase when `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are set, and SQLite for local development otherwise. When configured, Gemini is preferred for conversational replies using relevant guide/FAQ excerpts and the existing short chat history. OpenAI remains available for question classification and as a chat fallback if Gemini is unavailable; classification falls back to deterministic local rules when OpenAI is not configured.
 
 The bot does not perform, accelerate, or verify withdrawals. Boost replies are acknowledgments only. Question analytics redact six-digit UIDs and skip storing messages that match sensitive-credential checks. Incoming-message activity logs contain message metadata only, not message text.
 
 ## Setup
 
-1. Copy `.env.example` to `.env`. Configure `TELEGRAM_BOT_TOKEN`, Supabase credentials, and `ADMIN_USER_IDS` (comma-separated Telegram numeric IDs). `OPENAI_API_KEY` is optional.
-2. In Supabase SQL Editor, run the complete [`supabase/schema.sql`](supabase/schema.sql). It includes the existing tables plus the additive question-intelligence objects. The same additive objects are available in [`supabase/migrations/20261111_question_intelligence.sql`](supabase/migrations/20261111_question_intelligence.sql).
-3. Install dependencies and run the bot:
+1. Copy `.env.example` to `.env`. Configure `TELEGRAM_BOT_TOKEN`, Supabase credentials, and `ADMIN_USER_IDS` (comma-separated Telegram numeric IDs).
+2. To enable Gemini chat replies, set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` (default `gemini-3.8-flash`), `AI_ENABLED=true`, `AI_MAX_OUTPUT_TOKENS=300`, and `AI_TIMEOUT_SECONDS=45`. Keep the key in the ignored local `.env` or Render's Environment settings; never add it to source files or Git. `OPENAI_API_KEY` remains optional for question classification and can serve as a chat fallback.
+3. In Supabase SQL Editor, run the complete [`supabase/schema.sql`](supabase/schema.sql). It includes the existing tables plus the additive question-intelligence objects. The same additive objects are available in [`supabase/migrations/20261111_question_intelligence.sql`](supabase/migrations/20261111_question_intelligence.sql).
+4. Install dependencies and run the bot:
 
    ```powershell
    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
