@@ -70,6 +70,51 @@ class BotTests(unittest.TestCase):
         self.assertIsNone(bot._classify_locked_screenshot("Locking 100 Quota 100"))
         self.assertIsNone(bot._classify_locked_screenshot("Order completed 100"))
 
+    def test_screenshot_classifier_detects_only_clear_withdrawal_pending_status(self):
+        reference_ocr = (
+            "Withdrawal 07/11/2026 13/11/2026 Pending "
+            "MobiKwik 200.00 Pending Quota Rs 200.00 Balance Rs 36.22"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(reference_ocr),
+            "withdrawal_pending",
+        )
+        self.assertIsNone(bot._classify_screenshot("Withdrawal Pending"))
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Withdrawal Pending Successful Quota 200 Balance 36"
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Withdrawal Failed Pending Quota 200 Balance 36"
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Withdrawal Rejected Pending Quota 200 Balance 36"
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Order Pending Quota 200 Balance 36"
+            )
+        )
+        self.assertEqual(
+            bot._classify_screenshot(
+                "Withdrawal Locking Pending 100 Quota -100 Balance 27"
+            ),
+            "withdrawal",
+        )
+        self.assertEqual(
+            bot._classify_screenshot(
+                "Order Locking Pending 100 Quota 104 Balance 5"
+            ),
+            "order",
+        )
+        self.assertIsNone(bot._classify_screenshot("Unrelated Pending photo"))
+        self.assertIsNone(bot._classify_screenshot(""))
+
     def test_locked_screenshot_templates_keep_category_specific_timing(self):
         self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 7)
         self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 7)
@@ -82,6 +127,20 @@ class BotTests(unittest.TestCase):
             "🔄 Relink your locked order wallet to refresh the locked withdrawal." in text
             for text in bot.WITHDRAWAL_IMAGE_REPLIES
         ))
+
+    def test_withdrawal_pending_templates_meet_all_response_requirements(self):
+        templates = bot.WITHDRAWAL_PENDING_IMAGE_REPLIES
+        self.assertEqual(len(templates), 10)
+        self.assertEqual(len(set(templates)), 10)
+        for template in templates:
+            normalized = template.casefold()
+            self.assertIn("pending", normalized)
+            self.assertIn("5–10 minutes", template)
+            self.assertIn("withdrawal history", normalized)
+            self.assertIn("customer support", normalized)
+            self.assertIn("10 minutes", normalized)
+            self.assertIn("updated screenshot", normalized)
+        self.assertFalse(any("successful" in text.casefold() for text in templates))
 
     def test_tesseract_ocr_honors_configured_executable(self):
         fake_pytesseract = SimpleNamespace(
@@ -115,7 +174,11 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot._classify_locked_screenshot(text), "withdrawal")
 
     def test_every_screenshot_template_is_a_possible_random_choice(self):
-        for templates in (bot.ORDER_IMAGE_REPLIES, bot.WITHDRAWAL_IMAGE_REPLIES):
+        for templates in (
+            bot.ORDER_IMAGE_REPLIES,
+            bot.WITHDRAWAL_IMAGE_REPLIES,
+            bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
+        ):
             for template in templates:
                 with patch.object(bot.random, "choice", return_value=template) as choose:
                     self.assertEqual(bot.random.choice(list(templates)), template)
@@ -160,6 +223,73 @@ class BotTests(unittest.TestCase):
             bot.logging.getLogger("httpcore").getEffectiveLevel(),
             bot.logging.WARNING,
         )
+
+    def test_withdrawal_pending_reply_uses_random_template_and_deduplicates(self):
+        async def scenario():
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={}),
+                bot=SimpleNamespace(send_message=AsyncMock()),
+            )
+            message = SimpleNamespace(
+                message_id=71,
+                photo=[SimpleNamespace(file_id="pending-photo")],
+                document=None,
+            )
+            update = SimpleNamespace(
+                effective_message=message,
+                effective_chat=SimpleNamespace(id=-100, type="supergroup"),
+                effective_user=SimpleNamespace(id=12),
+            )
+            reference_ocr = (
+                "Withdrawal 07/11/2026 13/11/2026 Pending "
+                "MobiKwik 200.00 Pending Quota Rs 200.00 Balance Rs 36.22"
+            )
+            with patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(return_value=reference_ocr),
+            ), patch.object(
+                bot.random,
+                "choice",
+                side_effect=lambda choices: choices[0],
+            ):
+                await asyncio.gather(
+                    bot.group_screenshot_handler(update, context),
+                    bot.group_screenshot_handler(update, context),
+                )
+                self.assertEqual(context.bot.send_message.await_count, 1)
+                first_reply = context.bot.send_message.await_args.kwargs
+                self.assertEqual(
+                    first_reply["reply_to_message_id"],
+                    message.message_id,
+                )
+                self.assertIn(
+                    first_reply["text"],
+                    bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
+                )
+
+                message.message_id = 72
+                message.photo = []
+                message.document = SimpleNamespace(
+                    file_id="pending-document",
+                    mime_type="image/png",
+                )
+                await bot.group_screenshot_handler(update, context)
+                self.assertEqual(context.bot.send_message.await_count, 2)
+                second_reply = context.bot.send_message.await_args.kwargs
+                self.assertEqual(second_reply["reply_to_message_id"], 72)
+                self.assertIn(
+                    second_reply["text"],
+                    bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
+                )
+                self.assertNotEqual(first_reply["text"], second_reply["text"])
+
+        with patch.object(
+            bot,
+            "DB_PATH",
+            self.root / "withdrawal-pending-replies.sqlite3",
+        ):
+            asyncio.run(scenario())
 
     def test_screenshot_reply_claim_persists_across_restart(self):
         db_path = self.root / "screenshot-claims.sqlite3"

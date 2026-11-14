@@ -1398,6 +1398,19 @@ WITHDRAWAL_IMAGE_REPLIES = (
     "◆ iPAY – WITHDRAWAL VERIFICATION\n\n▪️ Review your UPI limit and bank status.\n▪️ Confirm your UPI account is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Allow time for system processing.\n\n⏳ The withdrawal may remain locked temporarily.\n📞 Contact CS if unresolved.\n\n◆ iPAY SUPPORT – STAY UPDATED!",
 )
 
+WITHDRAWAL_PENDING_IMAGE_REPLIES = (
+    "1️⃣ ⏳ WITHDRAWAL PENDING\n\nYour withdrawal is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "2️⃣ ⏳ PROCESSING UPDATE\n\nYour withdrawal request is still Pending.\n\nPlease allow 5–10 minutes for processing.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "3️⃣ 📌 WITHDRAWAL STATUS\n\nYour withdrawal is awaiting processing and remains Pending.\n\n⏰ Kindly allow 5–10 minutes.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it is still Pending after 10 minutes, share an updated screenshot with Customer Support.",
+    "4️⃣ 🔔 PENDING NOTIFICATION\n\nYour withdrawal status is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your withdrawal history for the latest update.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "5️⃣ ⏳ WITHDRAWAL UPDATE\n\nYour request is still being processed and remains Pending.\n\nPlease allow 5–10 minutes for the next update.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "6️⃣ 📍 STATUS CHECK\n\nYour withdrawal is showing as Pending.\n\n⏰ Allow 5–10 minutes for processing.\n\n📱 Refresh your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "7️⃣ 🔄 WITHDRAWAL PROCESSING\n\nYour withdrawal request is currently Pending.\n\nKindly allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history regularly.\n\n⚠️ If it remains Pending after 10 minutes, send an updated screenshot to Customer Support.",
+    "8️⃣ ⚠️ PENDING STATUS UPDATE\n\nYour withdrawal is still Pending and has not yet been completed.\n\n⏳ Please allow 5–10 minutes for processing.\n\n📱 Monitor your withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "9️⃣ 📌 WITHDRAWAL FOLLOW-UP\n\nYour withdrawal request is still Pending.\n\n🔄 Please allow another 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for the latest status.\n\n⚠️ If it remains Pending after 10 minutes, share an updated screenshot with Customer Support.",
+    "🔟 ⏳ IMPORTANT WITHDRAWAL NOTICE\n\nYour withdrawal is currently Pending.\n\nPlease allow 5–10 minutes for system processing.\n\n📱 Keep checking your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+)
+
 
 def _classify_locked_screenshot(text: str) -> Optional[str]:
     """Classify only when OCR finds one page heading and its locking status."""
@@ -1410,6 +1423,33 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
     if order_heading == withdrawal_heading:
         return None
     return "order" if order_heading else "withdrawal"
+
+
+def _classify_screenshot(text: str) -> Optional[str]:
+    """Classify locking screenshots and clear withdrawal-pending status pages."""
+    normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    order_heading = bool(re.search(r"\border\b", normalized))
+    withdrawal_heading = bool(re.search(r"\bwithdraw(?:al)?\b", normalized))
+    if order_heading == withdrawal_heading:
+        return None
+
+    if re.search(r"\blocking\b", normalized):
+        return _classify_locked_screenshot(text)
+
+    if order_heading or not re.search(r"\bpending\b", normalized):
+        return None
+    terminal_status = re.search(
+        r"\b(?:success(?:ful)?|complete(?:d)?|fail(?:ed|ure)?|"
+        r"reject(?:ed)?|cancel(?:led|ed)|declin(?:e|ed))\b",
+        normalized,
+    )
+    withdrawal_record_context = re.search(
+        r"\b(?:quota|balance|amount|transaction|history|upi|bank|date)\b",
+        normalized,
+    )
+    if terminal_status or not withdrawal_record_context:
+        return None
+    return "withdrawal_pending"
 
 
 async def _read_screenshot_text(message, context) -> Optional[str]:
@@ -1530,7 +1570,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             message.message_id,
         )
         return
-    category = _classify_locked_screenshot(ocr_text)
+    category = _classify_screenshot(ocr_text)
     if not category:
         log.info(
             "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, category=none)",
@@ -1566,7 +1606,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         chat.id,
         message.message_id,
     )
-    templates = ORDER_IMAGE_REPLIES if category == "order" else WITHDRAWAL_IMAGE_REPLIES
+    templates_by_category = {
+        "order": ORDER_IMAGE_REPLIES,
+        "withdrawal": WITHDRAWAL_IMAGE_REPLIES,
+        "withdrawal_pending": WITHDRAWAL_PENDING_IMAGE_REPLIES,
+    }
+    templates = templates_by_category[category]
     user = update.effective_user
     user_id = getattr(user, "id", None)
     bot_data = context.application.bot_data
