@@ -180,8 +180,9 @@ _PROCESSED_HI_MESSAGES: Dict[Tuple[int, int], float] = {}
 _PROCESSED_HI_LOCK = threading.Lock()
 
 HI_RESPONSE = (
-    "👋 Hi! Welcome to iPAY Support.\n\n"
-    "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
+    "👋 Hello! Welcome to iPAY!\n\n"
+    "🤝 I'm your iPAY Support Assistant.\n"
+    "How may I assist you today?"
 )
 
 WELCOME = (
@@ -1282,6 +1283,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_home_message(update.effective_message)
 
 
+def _claim_hi_message(
+    chat_id: int,
+    message_id: Optional[int],
+    context: ContextTypes.DEFAULT_TYPE,
+) -> bool:
+    if message_id is None:
+        return True
+
+    application = getattr(context, "application", None)
+    bot_data = (
+        getattr(application, "bot_data", None)
+        if application
+        else getattr(context, "bot_data", None)
+    )
+    now = time.monotonic()
+    with _PROCESSED_HI_LOCK:
+        if isinstance(bot_data, dict):
+            processed = bot_data.setdefault("processed_hi_messages", {})
+        else:
+            processed = _PROCESSED_HI_MESSAGES
+        for key, timestamp in list(processed.items()):
+            if now - timestamp >= 180:
+                processed.pop(key, None)
+        message_key = (chat_id, message_id)
+        if message_key in processed:
+            return False
+        processed[message_key] = now
+    return True
+
+
+def _is_standalone_greeting(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.casefold()).strip()
+    normalized = re.sub(r"[!.,?;:]+$", "", normalized).strip()
+    return re.fullmatch(
+        r"(?:h+i+|hello|hey+|good morning|good afternoon|good evening|"
+        r"h+i+ buddy|hello buddy|hey+ buddy)",
+        normalized,
+    ) is not None
+
+
 async def hi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reply to /hi command in private chats and groups."""
     message = update.effective_message
@@ -1289,24 +1330,8 @@ async def hi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not message or not chat:
         return
 
-    message_id = getattr(message, "message_id", None)
-    if message_id is not None:
-        application = getattr(context, "application", None)
-        bot_data = getattr(application, "bot_data", None) if application else getattr(context, "bot_data", None)
-        now = time.monotonic()
-        with _PROCESSED_HI_LOCK:
-            if isinstance(bot_data, dict):
-                processed = bot_data.setdefault("processed_hi_messages", {})
-            else:
-                processed = _PROCESSED_HI_MESSAGES
-            for key, timestamp in list(processed.items()):
-                if now - timestamp >= 180:
-                    processed.pop(key, None)
-            message_key = (chat.id, message_id)
-            if message_key in processed:
-                return
-            processed[message_key] = now
-
+    if not _claim_hi_message(chat.id, getattr(message, "message_id", None), context):
+        return
     await message.reply_text(HI_RESPONSE)
 
 
@@ -1434,16 +1459,16 @@ WITHDRAWAL_IMAGE_REPLIES = (
 )
 
 WITHDRAWAL_PENDING_IMAGE_REPLIES = (
-    "1️⃣ ⏳ WITHDRAWAL PENDING\n\nYour withdrawal is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "2️⃣ ⏳ PROCESSING UPDATE\n\nYour withdrawal request is still Pending.\n\nPlease allow 5–10 minutes for processing.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "3️⃣ 📌 WITHDRAWAL STATUS\n\nYour withdrawal is awaiting processing and remains Pending.\n\n⏰ Kindly allow 5–10 minutes.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it is still Pending after 10 minutes, share an updated screenshot with Customer Support.",
-    "4️⃣ 🔔 PENDING NOTIFICATION\n\nYour withdrawal status is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your withdrawal history for the latest update.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "5️⃣ ⏳ WITHDRAWAL UPDATE\n\nYour request is still being processed and remains Pending.\n\nPlease allow 5–10 minutes for the next update.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "6️⃣ 📍 STATUS CHECK\n\nYour withdrawal is showing as Pending.\n\n⏰ Allow 5–10 minutes for processing.\n\n📱 Refresh your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "7️⃣ 🔄 WITHDRAWAL PROCESSING\n\nYour withdrawal request is currently Pending.\n\nKindly allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history regularly.\n\n⚠️ If it remains Pending after 10 minutes, send an updated screenshot to Customer Support.",
-    "8️⃣ ⚠️ PENDING STATUS UPDATE\n\nYour withdrawal is still Pending and has not yet been completed.\n\n⏳ Please allow 5–10 minutes for processing.\n\n📱 Monitor your withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
-    "9️⃣ 📌 WITHDRAWAL FOLLOW-UP\n\nYour withdrawal request is still Pending.\n\n🔄 Please allow another 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for the latest status.\n\n⚠️ If it remains Pending after 10 minutes, share an updated screenshot with Customer Support.",
-    "🔟 ⏳ IMPORTANT WITHDRAWAL NOTICE\n\nYour withdrawal is currently Pending.\n\nPlease allow 5–10 minutes for system processing.\n\n📱 Keep checking your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "⏳ WITHDRAWAL PENDING\n\nYour withdrawal is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "⏳ PROCESSING UPDATE\n\nYour withdrawal request is still Pending.\n\nPlease allow 5–10 minutes for processing.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "📌 WITHDRAWAL STATUS\n\nYour withdrawal is awaiting processing and remains Pending.\n\n⏰ Kindly allow 5–10 minutes.\n\n📱 Check your iPAY withdrawal history for updates.\n\n⚠️ If it is still Pending after 10 minutes, share an updated screenshot with Customer Support.",
+    "🔔 PENDING NOTIFICATION\n\nYour withdrawal status is currently Pending.\n\n🔄 Please allow 5–10 minutes for processing.\n\n📱 Check your withdrawal history for the latest update.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "⏳ WITHDRAWAL UPDATE\n\nYour request is still being processed and remains Pending.\n\nPlease allow 5–10 minutes for the next update.\n\n📱 Monitor your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "📍 STATUS CHECK\n\nYour withdrawal is showing as Pending.\n\n⏰ Allow 5–10 minutes for processing.\n\n📱 Refresh your iPAY withdrawal history for updates.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "🔄 WITHDRAWAL PROCESSING\n\nYour withdrawal request is currently Pending.\n\nKindly allow 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history regularly.\n\n⚠️ If it remains Pending after 10 minutes, send an updated screenshot to Customer Support.",
+    "⚠️ PENDING STATUS UPDATE\n\nYour withdrawal is still Pending and has not yet been completed.\n\n⏳ Please allow 5–10 minutes for processing.\n\n📱 Monitor your withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
+    "📌 WITHDRAWAL FOLLOW-UP\n\nYour withdrawal request is still Pending.\n\n🔄 Please allow another 5–10 minutes for processing.\n\n📱 Check your iPAY withdrawal history for the latest status.\n\n⚠️ If it remains Pending after 10 minutes, share an updated screenshot with Customer Support.",
+    "⏳ IMPORTANT WITHDRAWAL NOTICE\n\nYour withdrawal is currently Pending.\n\nPlease allow 5–10 minutes for system processing.\n\n📱 Keep checking your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
 )
 
 
@@ -3684,6 +3709,13 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = message_text.strip()
 
+    if getattr(message, "text", None):
+        greeting_text = re.sub(r"@\w+", "", text).strip()
+        if _is_standalone_greeting(greeting_text):
+            if _claim_hi_message(chat.id, message_id, context):
+                await message.reply_text(HI_RESPONSE)
+            return
+
     # Handle Boost keyword triggers (with typo tolerance: bost, boost, b00st, etc.)
     boost_match = re.search(
         r"(?i)\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\s*[:=\-#]?\s*(\d{6})\b",
@@ -3749,10 +3781,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         processed[message_key] = now
         context.application.bot_data["processed_ai_messages"] = processed
 
-    # If the user tagged the bot alone or sent a greeting like hi/hii/hello
+    # Keep these short menu prompts separate from ordinary support questions.
     clean_text = re.sub(r"@\w+", "", text).strip().lower()
     clean_norm = re.sub(r"[^\w\s]", "", clean_text).strip()
-    if clean_norm in {"", "hi", "hii", "hiii", "hello", "hey", "heyy", "help", "start", "/hii", "/hi"}:
+    if clean_norm in {"", "help", "start", "/hii", "/hi"}:
         if is_group:
             await message.reply_text("Please tell me what you need help with.")
             return

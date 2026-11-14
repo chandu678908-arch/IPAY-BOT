@@ -132,8 +132,12 @@ class BotTests(unittest.TestCase):
         templates = bot.WITHDRAWAL_PENDING_IMAGE_REPLIES
         self.assertEqual(len(templates), 10)
         self.assertEqual(len(set(templates)), 10)
+        numbering_emojis = tuple(
+            f"{number}\ufe0f\u20e3" for number in range(1, 10)
+        ) + ("🔟",)
         for template in templates:
             normalized = template.casefold()
+            self.assertFalse(template.startswith(numbering_emojis))
             self.assertIn("pending", normalized)
             self.assertIn("5–10 minutes", template)
             self.assertIn("withdrawal history", normalized)
@@ -2025,7 +2029,118 @@ class BotTests(unittest.TestCase):
         ai_answer.assert_awaited_once()
         self.assertIn("Check the order status.", message.reply_text.await_args.args[0])
 
-    def test_group_greeting_to_bot_only_sends_short_greeting(self):
+    def test_automatic_greetings_reply_in_private_group_and_supergroup(self):
+        greeting_messages = (
+            "hi",
+            "hii",
+            "hiii",
+            "hiiii",
+            "Hello",
+            "HEY",
+            "heyy",
+            "Good morning",
+            "  GOOD    AFTERNOON  ",
+            "good evening",
+            "hello buddy",
+            "Hi buddy",
+            "Hey buddy",
+            "Hi!!!",
+            "@ipaybot hi",
+        )
+        chat_types = (
+            bot.ChatType.PRIVATE,
+            bot.ChatType.GROUP,
+            bot.ChatType.SUPERGROUP,
+        )
+
+        for index, greeting in enumerate(greeting_messages):
+            with self.subTest(greeting=greeting):
+                message = SimpleNamespace(
+                    text=greeting,
+                    message_id=600 + index,
+                    reply_text=AsyncMock(),
+                )
+                update = SimpleNamespace(
+                    effective_message=message,
+                    effective_user=SimpleNamespace(id=123),
+                    effective_chat=SimpleNamespace(
+                        type=chat_types[index % len(chat_types)],
+                        id=-10042 - index,
+                    ),
+                )
+                context = SimpleNamespace(
+                    application=SimpleNamespace(bot_data={})
+                )
+
+                asyncio.run(bot.ai_reply(update, context))
+
+                message.reply_text.assert_awaited_once_with(bot.HI_RESPONSE)
+
+    def test_automatic_greeting_deduplicates_with_hi_command(self):
+        message = SimpleNamespace(text="hi", message_id=650, reply_text=AsyncMock())
+        chat = SimpleNamespace(id=-10042, type=bot.ChatType.SUPERGROUP)
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=123),
+            effective_chat=chat,
+        )
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
+
+        asyncio.run(bot.hi_command(update, context))
+        asyncio.run(bot.ai_reply(update, context))
+
+        message.reply_text.assert_awaited_once_with(bot.HI_RESPONSE)
+
+    def test_greeting_words_inside_sentences_use_normal_support_handler(self):
+        messages = (
+            "Hi, I need help with withdrawal",
+            "How can I say hello to someone?",
+        )
+        for index, text in enumerate(messages):
+            with self.subTest(text=text):
+                message = SimpleNamespace(
+                    text=text,
+                    message_id=700 + index,
+                    reply_text=AsyncMock(),
+                )
+                update = SimpleNamespace(
+                    effective_message=message,
+                    effective_user=SimpleNamespace(id=123),
+                    effective_chat=SimpleNamespace(
+                        type=bot.ChatType.PRIVATE,
+                        id=700 + index,
+                    ),
+                )
+                context = SimpleNamespace(
+                    application=SimpleNamespace(
+                        bot_data={
+                            "guide": self.make_guide(),
+                            "ai_client": object(),
+                            "last_message_at": {},
+                        }
+                    )
+                )
+                answer = "Here is the relevant support guidance."
+                with (
+                    patch.object(bot, "DB_PATH", self.root / f"greeting-{index}.sqlite3"),
+                    patch.object(bot, "get_setting", return_value="on"),
+                    patch.object(bot, "_enabled_languages", return_value=("English",)),
+                    patch.object(
+                        bot,
+                        "_ai_answer",
+                        new=AsyncMock(return_value=(answer, [])),
+                    ) as ai_answer,
+                    patch.object(bot, "add_message"),
+                    patch.object(bot, "_save_question_event", new=AsyncMock()),
+                ):
+                    asyncio.run(bot.ai_reply(update, context))
+
+                ai_answer.assert_awaited_once()
+                self.assertEqual(ai_answer.await_args.args[0], text)
+                self.assertIn(answer, message.reply_text.await_args.args[0])
+                self.assertNotEqual(message.reply_text.await_args.args[0], bot.HI_RESPONSE)
+
+    def test_group_greeting_to_bot_only_sends_greeting_response(self):
         message = SimpleNamespace(
             text="@ipaybot hi",
             entities=[
@@ -2049,9 +2164,7 @@ class BotTests(unittest.TestCase):
         with patch.object(bot, "_send_home_message", new=AsyncMock()) as home_message:
             asyncio.run(bot.ai_reply(update, context))
 
-        message.reply_text.assert_awaited_once_with(
-            "Please tell me what you need help with."
-        )
+        message.reply_text.assert_awaited_once_with(bot.HI_RESPONSE)
         message.reply_photo.assert_not_awaited()
         home_message.assert_not_awaited()
 
@@ -2963,10 +3076,7 @@ class BotTests(unittest.TestCase):
         update = SimpleNamespace(effective_message=message, effective_chat=chat)
         context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
         asyncio.run(bot.hi_command(update, context))
-        message.reply_text.assert_awaited_once_with(
-            "👋 Hi! Welcome to iPAY Support.\n\n"
-            "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
-        )
+        message.reply_text.assert_awaited_once_with(bot.HI_RESPONSE)
 
     def test_hi_command_in_group_chat(self):
         message = SimpleNamespace(text="/hi", message_id=1002, reply_text=AsyncMock())
@@ -2974,10 +3084,7 @@ class BotTests(unittest.TestCase):
         update = SimpleNamespace(effective_message=message, effective_chat=chat)
         context = SimpleNamespace(application=SimpleNamespace(bot_data={}))
         asyncio.run(bot.hi_command(update, context))
-        message.reply_text.assert_awaited_once_with(
-            "👋 Hi! Welcome to iPAY Support.\n\n"
-            "🤝 I'm your iPAY Support Assistant. How may I assist you today?"
-        )
+        message.reply_text.assert_awaited_once_with(bot.HI_RESPONSE)
 
     def test_hi_command_avoids_duplicate_replies(self):
         message = SimpleNamespace(text="/hi", message_id=2001, reply_text=AsyncMock())
