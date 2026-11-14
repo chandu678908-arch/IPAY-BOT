@@ -12,7 +12,9 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -23,6 +25,9 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from telegram import (
     BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputFile,
@@ -161,6 +166,16 @@ BOOST_UID_PROMPT = (
 )
 REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
+BOOST_MESSAGE_RETENTION_SECONDS = 30 * 24 * 60 * 60
+BOOST_REQUEST = "BOOST_REQUEST"
+BOOST_SALE = "BOOST_SALE"
+BOOST_DETAILS = "BOOST_DETAILS"
+BOOST_APPLIED = "BOOST_APPLIED"
+BOOST_COMPLETED = "BOOST_COMPLETED"
+BOOST_STATUS_QUERY = "BOOST_STATUS_QUERY"
+BOOST_HELP_REQUEST = "BOOST_HELP_REQUEST"
+BOOST_INVALID_UID = "BOOST_INVALID_UID"
+BOOST_UNCLEAR = "BOOST_UNCLEAR"
 ADMIN_USER_IDS = {
     int(value.strip())
     for value in os.getenv("ADMIN_USER_IDS", "").split(",")
@@ -178,6 +193,9 @@ _SUPABASE_CLIENT = None
 _SUPABASE_CLIENT_LOCK = threading.Lock()
 _PROCESSED_HI_MESSAGES: Dict[Tuple[int, int], float] = {}
 _PROCESSED_HI_LOCK = threading.Lock()
+SCREENSHOT_IMAGE_COOLDOWN_SECONDS = 300
+MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
+MAX_SCREENSHOT_PIXELS = 40_000_000
 
 HI_RESPONSE = (
     "👋 Hello! Welcome to iPAY!\n\n"
@@ -658,6 +676,22 @@ def db() -> sqlite3.Connection:
                             created_at TEXT NOT NULL DEFAULT (datetime('now')),
                             PRIMARY KEY (chat_id, message_id)
                         );
+                        CREATE TABLE IF NOT EXISTS handled_boost_messages (
+                            chat_id INTEGER NOT NULL,
+                            message_id INTEGER NOT NULL,
+                            created_at INTEGER NOT NULL,
+                            PRIMARY KEY (chat_id, message_id)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_handled_boost_messages_created_at
+                            ON handled_boost_messages(created_at);
+                        CREATE TABLE IF NOT EXISTS screenshot_image_cooldowns (
+                            user_id INTEGER NOT NULL,
+                            image_hash TEXT NOT NULL,
+                            last_submitted_at REAL NOT NULL,
+                            PRIMARY KEY (user_id, image_hash)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_screenshot_cooldowns_expiry
+                            ON screenshot_image_cooldowns(last_submitted_at);
                         CREATE INDEX IF NOT EXISTS idx_unanswered_question_time
                             ON unanswered_questions(question, created_at);
                         """
@@ -1471,6 +1505,51 @@ WITHDRAWAL_PENDING_IMAGE_REPLIES = (
     "⏳ IMPORTANT WITHDRAWAL NOTICE\n\nYour withdrawal is currently Pending.\n\nPlease allow 5–10 minutes for system processing.\n\n📱 Keep checking your iPAY withdrawal history.\n\n⚠️ If it remains Pending after 10 minutes, contact Customer Support with an updated screenshot.",
 )
 
+DUPLICATE_IMAGE_WARNING_TEMPLATES = (
+    "⚠️ DUPLICATE IMAGE DETECTED\n\n"
+    "Buddy, you have already submitted this screenshot.\n\n"
+    "⏳ Please wait for 5 minutes before submitting it again.\n\n"
+    "🤝 Kindly avoid sending the same image repeatedly.\n\n"
+    "Thank you for your patience!\n\n"
+    "◆ iPAY SUPPORT",
+    "👋 REPEATED IMAGE NOTICE\n\n"
+    "We have already received this screenshot.\n\n"
+    "⏰ Please wait for 5 minutes before sending it again.\n\n"
+    "📱 Our system is processing your previous submission.\n\n"
+    "Thank you for cooperating!\n\n"
+    "◆ iPAY SUPPORT",
+    "📌 DUPLICATE SUBMISSION ALERT\n\n"
+    "This screenshot has already been submitted.\n\n"
+    "🔄 Please avoid uploading the same image multiple times.\n\n"
+    "⏳ Kindly wait 5 minutes before trying again.\n\n"
+    "🤝 Thank you for your understanding!\n\n"
+    "◆ iPAY CUSTOMER SUPPORT",
+    "⏳ SAME IMAGE RECEIVED\n\n"
+    "Buddy, we have already received this screenshot.\n\n"
+    "Please wait 5 minutes before submitting it again.\n\n"
+    "📱 Allow the system to process your previous submission.\n\n"
+    "Thank you for your patience!\n\n"
+    "◆ iPAY SUPPORT",
+    "🔔 IMPORTANT UPLOAD NOTICE\n\n"
+    "Your screenshot has already been received.\n\n"
+    "⚠️ Repeated uploads are not required.\n\n"
+    "⏳ Please wait for 5 minutes before submitting the same image again.\n\n"
+    "🤝 We appreciate your cooperation!\n\n"
+    "◆ iPAY SUPPORT",
+)
+
+
+def _select_duplicate_image_warning(bot_data: dict) -> str:
+    previous = bot_data.get("last_duplicate_image_warning")
+    choices = [
+        warning
+        for warning in DUPLICATE_IMAGE_WARNING_TEMPLATES
+        if warning != previous
+    ]
+    selected = random.choice(choices or list(DUPLICATE_IMAGE_WARNING_TEMPLATES))
+    bot_data["last_duplicate_image_warning"] = selected
+    return selected
+
 
 def _classify_locked_screenshot(text: str) -> Optional[str]:
     """Classify only when OCR finds one page heading and its locking status."""
@@ -1512,12 +1591,19 @@ def _classify_screenshot(text: str) -> Optional[str]:
     return "withdrawal_pending"
 
 
-async def _read_screenshot_text(message, context) -> Optional[str]:
-    """OCR Telegram photo/document bytes locally; never upload transaction images."""
+async def _download_screenshot_bytes(message, context) -> Optional[bytes]:
+    """Download and validate one Telegram image without retaining it on disk."""
     photo = getattr(message, "photo", None) or []
     document = getattr(message, "document", None)
     file_obj = photo[-1] if photo else document
     if not file_obj:
+        return None
+    file_size = getattr(file_obj, "file_size", None)
+    if file_size is not None and file_size > MAX_SCREENSHOT_BYTES:
+        log.warning(
+            "IMAGE REJECTED (message_id=%s, reason=file_too_large)",
+            getattr(message, "message_id", None),
+        )
         return None
     try:
         telegram_file = await context.bot.get_file(file_obj.file_id)
@@ -1529,11 +1615,48 @@ async def _read_screenshot_text(message, context) -> Optional[str]:
             type(exc).__name__,
         )
         return None
+    if not image_bytes or len(image_bytes) > MAX_SCREENSHOT_BYTES:
+        log.warning(
+            "IMAGE REJECTED (message_id=%s, reason=invalid_size)",
+            getattr(message, "message_id", None),
+        )
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            if image.width * image.height > MAX_SCREENSHOT_PIXELS:
+                log.warning(
+                    "IMAGE REJECTED (message_id=%s, reason=image_dimensions_too_large)",
+                    getattr(message, "message_id", None),
+                )
+                return None
+            image.verify()
+    except Exception as exc:
+        log.warning(
+            "IMAGE VALIDATION FAILED (message_id=%s, error=%s)",
+            getattr(message, "message_id", None),
+            type(exc).__name__,
+        )
+        return None
     log.info(
         "IMAGE DOWNLOADED (message_id=%s, bytes=%s)",
         getattr(message, "message_id", None),
         len(image_bytes),
     )
+    return image_bytes
+
+
+async def _read_screenshot_text(
+    message,
+    context,
+    image_bytes: Optional[bytes] = None,
+) -> Optional[str]:
+    """OCR Telegram photo/document bytes locally; never upload transaction images."""
+    if image_bytes is None:
+        image_bytes = await _download_screenshot_bytes(message, context)
+    if image_bytes is None:
+        return None
 
     try:
         from PIL import Image  # noqa: F401
@@ -1574,7 +1697,7 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
 
 
 def _claim_screenshot_reply(chat_id: int, message_id: int) -> bool:
-    """Atomically claim a classified screenshot before sending its one reply."""
+    """Atomically claim a screenshot message so it is processed only once."""
     if supabase_enabled():
         response = (
             supabase_client()
@@ -1598,24 +1721,97 @@ def _claim_screenshot_reply(chat_id: int, message_id: int) -> bool:
         return cursor.rowcount == 1
 
 
+def _screenshot_image_hash(image_bytes: bytes) -> str:
+    return hashlib.sha256(image_bytes).hexdigest()
+
+
+def _claim_screenshot_image_cooldown(
+    user_id: int,
+    image_hash: str,
+    now: Optional[float] = None,
+) -> bool:
+    """Reserve this user's exact image for 300 seconds, atomically."""
+    if not re.fullmatch(r"[0-9a-f]{64}", image_hash):
+        raise ValueError("image_hash must be a lowercase SHA-256 digest")
+    current_time = time.time() if now is None else float(now)
+
+    if now is None and supabase_enabled():
+        try:
+            response = supabase_client().rpc(
+                "reserve_screenshot_image_cooldown",
+                {"p_user_id": user_id, "p_image_hash": image_hash},
+            ).execute()
+            result = response.data
+            if isinstance(result, bool):
+                return result
+            if isinstance(result, dict):
+                result = result.get("reserve_screenshot_image_cooldown")
+                if isinstance(result, bool):
+                    return result
+            if (
+                isinstance(result, list)
+                and len(result) == 1
+                and isinstance(result[0], bool)
+            ):
+                return result[0]
+            if (
+                isinstance(result, list)
+                and len(result) == 1
+                and isinstance(result[0], dict)
+            ):
+                result = result[0].get("reserve_screenshot_image_cooldown")
+                if isinstance(result, bool):
+                    return result
+            raise RuntimeError("Supabase returned an invalid cooldown result")
+        except Exception as exc:
+            log.warning(
+                "Supabase image cooldown unavailable; using local SQLite (%s)",
+                type(exc).__name__,
+            )
+
+    with closing(db()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "DELETE FROM screenshot_image_cooldowns WHERE last_submitted_at <= ?",
+            (current_time - SCREENSHOT_IMAGE_COOLDOWN_SECONDS,),
+        )
+        row = conn.execute(
+            "SELECT last_submitted_at FROM screenshot_image_cooldowns "
+            "WHERE user_id=? AND image_hash=?",
+            (user_id, image_hash),
+        ).fetchone()
+        if row and current_time - float(row[0]) < SCREENSHOT_IMAGE_COOLDOWN_SECONDS:
+            conn.commit()
+            return False
+        conn.execute(
+            "INSERT INTO screenshot_image_cooldowns(user_id,image_hash,last_submitted_at) "
+            "VALUES(?,?,?) ON CONFLICT(user_id,image_hash) DO UPDATE SET "
+            "last_submitted_at=excluded.last_submitted_at",
+            (user_id, image_hash, current_time),
+        )
+        conn.commit()
+        return True
+
+
 async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     if not message or not chat:
         return
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+    if chat.type not in (ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP):
         log.info(
-            "Ignoring screenshot outside a group (chat_type=%s, message_id=%s)",
+            "Ignoring screenshot in unsupported chat (chat_type=%s, message_id=%s)",
             chat.type,
             message.message_id,
         )
         return
-    if not (getattr(message, "photo", None) or (
-        getattr(message, "document", None)
-        and str(getattr(message.document, "mime_type", "")).startswith("image/")
-    )):
+    photo = getattr(message, "photo", None) or []
+    document = getattr(message, "document", None)
+    if document and not str(getattr(document, "mime_type", "")).startswith("image/"):
         return
-    media_type = "photo" if getattr(message, "photo", None) else "image document"
+    if not (photo or document):
+        return
+    media_type = "photo" if photo else "image document"
     log.info(
         "PHOTO DETECTED (chat_id=%s, message_id=%s, media=%s)",
         chat.id,
@@ -1623,7 +1819,95 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         media_type,
     )
 
-    ocr_text = await _read_screenshot_text(message, context)
+    try:
+        claimed = await asyncio.to_thread(
+            _claim_screenshot_reply, chat.id, message.message_id
+        )
+    except Exception as exc:
+        log.error(
+            "Could not persist screenshot message claim; skipping processing (%s)",
+            type(exc).__name__,
+        )
+        return
+    if not claimed:
+        log.info(
+            "Skipped duplicate screenshot message (chat_id=%s, message_id=%s)",
+            chat.id,
+            message.message_id,
+        )
+        return
+    log.info(
+        "Screenshot processing claim acquired (chat_id=%s, message_id=%s)",
+        chat.id,
+        message.message_id,
+    )
+
+    image_bytes = await _download_screenshot_bytes(message, context)
+    if image_bytes is None:
+        return
+
+    user = getattr(update, "effective_user", None) or getattr(
+        message, "from_user", None
+    )
+    user_id = getattr(user, "id", None)
+    if user_id is not None:
+        try:
+            image_hash = _screenshot_image_hash(image_bytes)
+        except Exception as exc:
+            log.warning(
+                "IMAGE HASH FAILED (message_id=%s, error=%s)",
+                message.message_id,
+                type(exc).__name__,
+            )
+        else:
+            try:
+                allowed = await asyncio.to_thread(
+                    _claim_screenshot_image_cooldown,
+                    user_id,
+                    image_hash,
+                )
+            except Exception as exc:
+                log.error(
+                    "Image cooldown check failed; continuing normal processing "
+                    "(message_id=%s, error=%s)",
+                    message.message_id,
+                    type(exc).__name__,
+                )
+            else:
+                if not allowed:
+                    log.info(
+                        "Duplicate screenshot image detected (message_id=%s)",
+                        message.message_id,
+                    )
+                    bot_data = getattr(
+                        getattr(context, "application", None), "bot_data", {}
+                    )
+                    if isinstance(bot_data, dict):
+                        warning = _select_duplicate_image_warning(bot_data)
+                    else:
+                        warning = random.choice(DUPLICATE_IMAGE_WARNING_TEMPLATES)
+                    try:
+                        await _reply_to_screenshot(
+                            context,
+                            chat.id,
+                            message.message_id,
+                            warning,
+                        )
+                    except TelegramError as exc:
+                        log.warning(
+                            "Could not send duplicate image warning (%s)",
+                            type(exc).__name__,
+                        )
+                    return
+    else:
+        log.warning(
+            "Screenshot user ID unavailable; skipping image cooldown "
+            "(chat_id=%s, message_id=%s)",
+            chat.id,
+            message.message_id,
+        )
+
+    ocr_text = await _read_screenshot_text(message, context, image_bytes)
     if not ocr_text:
         log.info(
             "CLASSIFICATION RESULT (message_id=%s, category=none, reason=no_ocr_text)",
@@ -1643,28 +1927,6 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         chat.id,
         message.message_id,
         category,
-    )
-    try:
-        claimed = await asyncio.to_thread(
-            _claim_screenshot_reply, chat.id, message.message_id
-        )
-    except Exception as exc:
-        log.error(
-            "Could not persist screenshot reply claim; skipping reply (%s)",
-            type(exc).__name__,
-        )
-        return
-    if not claimed:
-        log.info(
-            "Skipped duplicate screenshot reply (chat_id=%s, message_id=%s)",
-            chat.id,
-            message.message_id,
-        )
-        return
-    log.info(
-        "Screenshot reply claim acquired (chat_id=%s, message_id=%s)",
-        chat.id,
-        message.message_id,
     )
     templates_by_category = {
         "order": ORDER_IMAGE_REPLIES,
@@ -2059,11 +2321,290 @@ async def handle_uid_notice(
     )
 
 
-async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@dataclass(frozen=True)
+class BoostClassification:
+    category: str
+    uid: Optional[str]
+    usernames: Tuple[str, ...]
+    uid_issue: Optional[str] = None
+
+
+def _normalize_boost_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    normalized = re.sub(r"\bbo\s+ost\b", "boost", normalized)
+    normalized = re.sub(r"\bb[o0]{2}st\b", "boost", normalized)
+    normalized = re.sub(
+        r"\b(?:bost|boos|booost|boostt|boosted|bosted)\b",
+        "boost",
+        normalized,
+    )
+    normalized = re.sub(r"\b(?:sell|sal|sael)\b", "sale", normalized)
+    normalized = re.sub(r"\b(?:plz|pls)\b", "please", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _extract_boost_uid(text: str) -> Tuple[Optional[str], Optional[str]]:
+    labeled_values = [
+        match.group(1).strip(".,!?()[]{}<>#")
+        for match in re.finditer(
+            r"(?i)\b(?:uid|id)\b\s*[:#-]?\s*([^\s,;]+)",
+            text,
+        )
+    ]
+    if labeled_values:
+        if len(set(labeled_values)) > 1:
+            return None, "ambiguous"
+        value = labeled_values[0]
+        if re.fullmatch(r"\d{6}", value):
+            return value, None
+        return None, "invalid"
+
+    candidates = re.findall(r"(?<![\w@])\d{6}(?!\w)", text)
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        return None, "ambiguous"
+
+    if re.search(r"(?<![\w@])\d{5,7}(?!\w)", text):
+        return None, "invalid"
+    return None, "missing"
+
+
+def _extract_boost_usernames(text: str) -> Tuple[str, ...]:
+    matches = re.findall(r"(?<![\w@])@[A-Za-z][A-Za-z0-9_]{4,31}(?!\w)", text)
+    return tuple(dict.fromkeys(matches))
+
+
+def classify_boost_message(text: str) -> Optional[BoostClassification]:
+    """Classify explicit Boost requests without treating ordinary questions as applications."""
+    normalized = _normalize_boost_text(text or "")
+    if not re.search(r"\bboost\b", normalized):
+        return None
+
+    if re.search(
+        r"\b(?:how|what)\b.*\bboost\b.*\b(?:work|mean|function|explain)\b",
+        normalized,
+    ):
+        return None
+
+    tokens = set(re.findall(r"[a-z0-9]+", normalized))
+    uid, uid_issue = _extract_boost_uid(text or "")
+    usernames = _extract_boost_usernames(text or "")
+    strong_action_terms = {
+        "apply", "give", "get", "help", "need", "please", "request",
+        "required", "send", "want",
+    }
+    status_terms = {
+        "applied", "approved", "check", "complete", "completed", "done",
+        "pending", "progress", "received", "status", "update", "when",
+        "where", "working",
+    }
+    query_terms = {"check", "pending", "progress", "status", "update", "when", "where"}
+    status_claim_terms = {
+        "applied", "approved", "complete", "completed", "done", "received",
+    }
+    strong_action = bool(tokens & strong_action_terms)
+    compact_context = tokens - {"boost"} <= {
+        "applied", "approved", "boss", "bro", "complete", "completed", "details",
+        "done", "help", "id", "need", "please", "progress", "received", "required",
+        "sale", "send", "status", "support", "this", "uid", "update", "user",
+        "want", "when", "where", "working",
+    }
+    is_status_query = (
+        bool(tokens & query_terms)
+        or ("?" in text and bool(tokens & status_terms))
+        or (bool(tokens & status_claim_terms) and compact_context)
+    )
+
+    if uid_issue in {"invalid", "ambiguous"}:
+        category = BOOST_INVALID_UID
+    elif is_status_query and not ("request" in tokens or "sale" in tokens):
+        category = BOOST_STATUS_QUERY
+    elif "sale" in tokens and (uid or usernames or strong_action or compact_context):
+        category = BOOST_SALE
+    elif "details" in tokens and (
+        uid or usernames or strong_action or compact_context
+    ):
+        category = BOOST_DETAILS
+    elif "this" in tokens and "user" in tokens and uid:
+        category = BOOST_REQUEST
+    elif tokens & {"help", "support", "please", "boss", "bro"} and (
+        uid or usernames or strong_action or compact_context
+    ):
+        category = BOOST_HELP_REQUEST
+    elif strong_action or uid or usernames or (
+        "this" in tokens and "user" in tokens and compact_context
+    ):
+        category = BOOST_REQUEST
+    elif not compact_context:
+        return None
+    elif tokens - {"boost"} <= {"boss", "bro", "please"}:
+        category = BOOST_HELP_REQUEST
+    elif tokens - {"boost"}:
+        category = BOOST_UNCLEAR
+    else:
+        category = BOOST_UNCLEAR
+
+    return BoostClassification(
+        category=category,
+        uid=uid,
+        usernames=usernames,
+        uid_issue=uid_issue,
+    )
+
+
+def _claim_boost_message(chat_id: Optional[int], message_id: Optional[int]) -> bool:
+    if chat_id is None or message_id is None:
+        return True
+
+    conn = None
+    try:
+        conn = db()
+        now = int(time.time())
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "DELETE FROM handled_boost_messages WHERE created_at < ?",
+            (now - BOOST_MESSAGE_RETENTION_SECONDS,),
+        )
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO handled_boost_messages(chat_id, message_id, created_at) "
+            "VALUES (?, ?, ?)",
+            (chat_id, message_id, now),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+    except sqlite3.Error as exc:
+        if conn:
+            conn.rollback()
+        log.error("Boost message deduplication storage failed (%s)", type(exc).__name__)
+        return True
+    finally:
+        if conn:
+            conn.close()
+
+
+async def _record_boost_for_review(text: str) -> None:
+    try:
+        await asyncio.to_thread(record_unanswered_question, text[:500])
+    except Exception as exc:
+        log.warning("Could not save Boost message for review (%s)", type(exc).__name__)
+
+
+def _boost_classification_context(classification: BoostClassification) -> str:
+    labels = {
+        BOOST_REQUEST: "Boost request",
+        BOOST_SALE: "Boost sale",
+        BOOST_DETAILS: "Boost details",
+        BOOST_HELP_REQUEST: "Boost help request",
+        BOOST_STATUS_QUERY: "Boost status question",
+        BOOST_UNCLEAR: "Unclear Boost request",
+        BOOST_INVALID_UID: "Boost request with an invalid or ambiguous UID",
+    }
+    lines = [
+        f"<b>Detected type:</b> "
+        f"{escape(labels.get(classification.category, 'Boost request'))}"
+    ]
+    if classification.usernames:
+        lines.append(
+            "<b>Telegram usernames:</b> "
+            + ", ".join(escape(username) for username in classification.usernames)
+        )
+    return "\n\n" + "\n".join(lines)
+
+
+async def _handle_boost_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> bool:
+    classification = classify_boost_message(text)
+    if classification is None:
+        return False
+
+    message = update.effective_message
+    chat = getattr(update, "effective_chat", None)
+    if not message:
+        return True
+    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+    if not _claim_boost_message(chat_id, getattr(message, "message_id", None)):
+        return True
+
+    if classification.category == BOOST_INVALID_UID:
+        response = (
+            "⚠️ I couldn't identify one valid six-digit iPAY UID. "
+            "Please send exactly one UID, for example: ID: 123456."
+        )
+        if classification.usernames:
+            response += _boost_classification_context(classification)
+        await message.reply_text(response, parse_mode="HTML")
+        await _record_boost_for_review(text)
+        return True
+
+    if classification.category in {
+        BOOST_STATUS_QUERY,
+        BOOST_APPLIED,
+        BOOST_COMPLETED,
+    }:
+        response = (
+            "ℹ️ I can't verify a Boost's live status or confirm that it was applied. "
+            "Please check the iPAY app or contact Customer Support."
+        )
+        if classification.uid:
+            response += f"\n\n<b>UID:</b> <code>{escape(classification.uid)}</code>"
+        elif classification.uid_issue == "missing":
+            response += (
+                "\n\nPlease include the exact six-digit iPAY UID when contacting support."
+            )
+        response += _boost_classification_context(classification)
+        await message.reply_text(response, parse_mode="HTML")
+        await _record_boost_for_review(text)
+        return True
+
+    if not classification.uid:
+        if classification.uid_issue == "missing" and classification.category != BOOST_UNCLEAR:
+            response = BOOST_UID_PROMPT
+            if classification.usernames:
+                response += _boost_classification_context(classification)
+        else:
+            response = (
+                "📌 Please provide the correct six-digit iPAY UID and the Boost "
+                "details so I can identify the request."
+            )
+            if classification.usernames:
+                response += _boost_classification_context(classification)
+        if "<b>" in response:
+            await message.reply_text(response, parse_mode="HTML")
+        else:
+            await message.reply_text(response)
+        await _record_boost_for_review(text)
+        return True
+
+    context.args = [classification.uid]
+    await boost_command(
+        update,
+        context,
+        classification=classification,
+        source="caption" if getattr(message, "caption", None) else "message",
+    )
+    return True
+
+
+async def boost_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    classification: Optional[BoostClassification] = None,
+    source: Optional[str] = None,
+) -> None:
     """Show withdrawal support details for a valid UID."""
     message = update.effective_message
     if not message:
         return
+    if classification is None:
+        chat = getattr(update, "effective_chat", None)
+        chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
+        if not _claim_boost_message(chat_id, getattr(message, "message_id", None)):
+            return
 
     args = getattr(context, "args", []) or []
     uid = args[0].strip("#:, -") if len(args) == 1 else ""
@@ -2074,8 +2615,12 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = getattr(update, "effective_user", None)
     if user:
         request_time = int(time.time())
-        remaining = reserve_boost_request(
-            user.id, request_time, BOOST_COOLDOWN_SECONDS
+        remaining = (
+            0
+            if classification
+            else reserve_boost_request(
+                user.id, request_time, BOOST_COOLDOWN_SECONDS
+            )
         )
         record_boost_request(
             user_id=user.id,
@@ -2085,7 +2630,9 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             requested_at=request_time,
             outcome="rate_limited" if remaining else "received",
             remaining_seconds=remaining,
-            source="caption" if getattr(message, "caption", None) else "command",
+            source=source or (
+                "caption" if getattr(message, "caption", None) else "command"
+            ),
         )
         if remaining:
             minutes, seconds = divmod(remaining, 60)
@@ -2101,7 +2648,8 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 _optional_ai_client(context),
             )
             return
-        save_user_uid(user.id, user.username, user.first_name, uid)
+        if classification is None:
+            save_user_uid(user.id, user.username, user.first_name, uid)
         user_tag = f"@{user.username}" if user.username else (
             f"{user.first_name or 'User'} (Telegram ID {user.id})"
         )
@@ -2186,6 +2734,8 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"{acknowledgment}\n\n"
         f"{caption}"
     )
+    if classification:
+        notice_text += _boost_classification_context(classification)
     await message.reply_text(
         notice_text,
         parse_mode="HTML",
@@ -2196,50 +2746,14 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-def _mark_handled_boost_message(
-    context: ContextTypes.DEFAULT_TYPE,
-    update: Update,
-    message: Any,
-) -> None:
-    application = getattr(context, "application", None)
-    bot_data = getattr(application, "bot_data", None)
-    if not isinstance(bot_data, dict):
-        return
-    chat = getattr(update, "effective_chat", None)
-    chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
-    message_id = getattr(message, "message_id", None)
-    if chat_id is None or message_id is None:
-        return
-    handled = bot_data.setdefault("handled_boost_messages", {})
-    now = time.monotonic()
-    handled = {k: ts for k, ts in handled.items() if now - ts < 180}
-    handled[(chat_id, message_id)] = now
-    bot_data["handled_boost_messages"] = handled
-
-
 async def boost_caption_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Route boost requests sent as media captions to the standard handler."""
+    """Route Boost requests in media captions through the shared classifier."""
     message = update.effective_message
     caption = getattr(message, "caption", None) if message else None
-    if not caption:
-        return
-    if not re.search(
-        r"(?i)(?:/(?:boost|bost|boos|boostt|bot)\b|\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\b)",
-        caption,
-    ):
-        return
-
-    uids = re.findall(r"(?<!\d)\d{6}(?!\d)", caption)
-    if len(uids) != 1:
-        _mark_handled_boost_message(context, update, message)
-        await message.reply_text(BOOST_UID_PROMPT)
-        return
-
-    _mark_handled_boost_message(context, update, message)
-    context.args = [uids[0]]
-    await boost_command(update, context)
+    if caption:
+        await _handle_boost_message(update, context, caption)
 
 
 async def uid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3699,13 +4213,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat.type != ChatType.PRIVATE and not is_group:
         return
 
-    application = getattr(context, "application", None)
-    bot_data = getattr(application, "bot_data", None)
     message_id = getattr(message, "message_id", None)
-    if isinstance(bot_data, dict) and message_id is not None:
-        handled_boosts = bot_data.get("handled_boost_messages") or {}
-        if (chat.id, message_id) in handled_boosts:
-            return
 
     text = message_text.strip()
 
@@ -3716,24 +4224,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await message.reply_text(HI_RESPONSE)
             return
 
-    # Handle Boost keyword triggers (with typo tolerance: bost, boost, b00st, etc.)
-    boost_match = re.search(
-        r"(?i)\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\s*[:=\-#]?\s*(\d{6})\b",
-        text,
-    )
-    if boost_match:
-        extracted_uid = boost_match.group(1).strip()
-        context.args = [extracted_uid]
-        await boost_command(update, context)
-        return
-
-    # Keep boost-related requests out of the general AI answer path, which can
-    # otherwise return older or unrelated wording when no UID was included.
-    if re.search(
-        r"(?i)(?:/(?:boost|bost|boos|boostt|bot)\b|\b(?:boost|bost|booost|boos|b00st|boosted|bosted)\b)",
-        text,
-    ):
-        await message.reply_text(BOOST_UID_PROMPT)
+    if await _handle_boost_message(update, context, text):
         return
 
     # Handle explicit UID requests without claiming account verification.
@@ -3897,10 +4388,20 @@ async def _post_init(application: Application) -> None:
         BotCommand("start", "Show the iPay welcome menu"),
         BotCommand("boost", "Mention your six-digit UID; one request every five minutes"),
     ]
-    try:
-        await application.bot.set_my_commands(commands)
-    except TelegramError as exc:
-        log.error("Could not publish the Telegram command list (%s)", type(exc).__name__)
+    scopes = (
+        BotCommandScopeDefault(),
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+    )
+    for scope in scopes:
+        try:
+            await application.bot.set_my_commands(commands, scope=scope)
+        except TelegramError as exc:
+            log.error(
+                "Could not publish the Telegram command list for %s (%s)",
+                scope.type,
+                type(exc).__name__,
+            )
 
 
 def create_guide() -> Guide:

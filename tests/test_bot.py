@@ -3,14 +3,19 @@ import shutil
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import uuid
 
 import pymupdf
-from telegram import Chat, Document, Message, PhotoSize, Update
+from PIL import Image
+from telegram import Bot as TelegramBot
+from telegram import Chat, Document, Message, MessageEntity, PhotoSize, Update, User
+from telegram.constants import MessageEntityType
 from telegram.error import BadRequest, Conflict
 from telegram.ext import CommandHandler, MessageHandler
 
@@ -146,6 +151,39 @@ class BotTests(unittest.TestCase):
             self.assertIn("updated screenshot", normalized)
         self.assertFalse(any("successful" in text.casefold() for text in templates))
 
+    def test_duplicate_warning_templates_are_randomized_and_unnumbered(self):
+        templates = bot.DUPLICATE_IMAGE_WARNING_TEMPLATES
+        self.assertEqual(len(templates), 5)
+        self.assertEqual(len(set(templates)), 5)
+        numbering_emojis = tuple(
+            f"{number}\ufe0f\u20e3" for number in range(1, 10)
+        ) + ("🔟",)
+        self.assertTrue(all(not text.startswith(numbering_emojis) for text in templates))
+
+        for template in templates:
+            with self.subTest(template=template), patch.object(
+                bot.random,
+                "choice",
+                return_value=template,
+            ) as choose:
+                bot_data = {}
+                self.assertEqual(
+                    bot._select_duplicate_image_warning(bot_data),
+                    template,
+                )
+                self.assertEqual(bot_data["last_duplicate_image_warning"], template)
+                choose.assert_called_once()
+
+        bot_data = {"last_duplicate_image_warning": templates[0]}
+        with patch.object(
+            bot.random,
+            "choice",
+            side_effect=lambda choices: choices[0],
+        ) as choose:
+            selected = bot._select_duplicate_image_warning(bot_data)
+        self.assertNotEqual(selected, templates[0])
+        self.assertNotIn(templates[0], choose.call_args.args[0])
+
     def test_tesseract_ocr_honors_configured_executable(self):
         fake_pytesseract = SimpleNamespace(
             pytesseract=SimpleNamespace(tesseract_cmd=""),
@@ -204,9 +242,19 @@ class BotTests(unittest.TestCase):
                 effective_chat=SimpleNamespace(id=-100, type="supergroup"),
                 effective_user=SimpleNamespace(id=5),
             )
-            with patch.object(bot, "_read_screenshot_text", new=AsyncMock(
-                return_value="Order INR Locking 11000 Quota 11418"
-            )), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
+            with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(side_effect=[b"image-a", b"image-b"]),
+            ), patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(return_value="Order INR Locking 11000 Quota 11418"),
+            ), patch.object(
+                bot.random,
+                "choice",
+                side_effect=lambda options: options[0],
+            ):
                 await bot.group_screenshot_handler(update, context)
                 first = context.bot.send_message.await_args.kwargs["text"]
                 self.assertEqual(
@@ -278,7 +326,15 @@ class BotTests(unittest.TestCase):
                 "order-photo": 0,
             }
 
-            async def read_ocr(message, _context):
+            async def download_image(message, _context):
+                file_id = (
+                    message.photo[-1].file_id
+                    if message.photo
+                    else message.document.file_id
+                )
+                return file_id.encode("utf-8")
+
+            async def read_ocr(message, _context, image_bytes=None):
                 file_id = (
                     message.photo[-1].file_id
                     if message.photo
@@ -288,6 +344,10 @@ class BotTests(unittest.TestCase):
                 return transcripts[file_id]
 
             with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=download_image,
+            ), patch.object(
                 bot,
                 "_read_screenshot_text",
                 new=read_ocr,
@@ -349,6 +409,99 @@ class BotTests(unittest.TestCase):
             ignore_duplicates=True,
         )
 
+    def test_screenshot_image_cooldown_is_scoped_and_expires_after_five_minutes(self):
+        image_hash = "a" * 64
+        different_image_hash = "b" * 64
+        db_path = self.root / "screenshot-image-cooldowns.sqlite3"
+        schema_key = str(db_path.resolve())
+        with patch.object(bot, "DB_PATH", db_path):
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1000)
+            )
+            self.assertFalse(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1299.9)
+            )
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(
+                    100, different_image_hash, now=1001
+                )
+            )
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(200, image_hash, now=1001)
+            )
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1300)
+            )
+            bot._DB_INITIALIZED_PATHS.discard(schema_key)
+            self.assertFalse(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1301)
+            )
+
+    def test_screenshot_image_cooldown_allows_recompressed_images(self):
+        original = Image.new("RGB", (32, 32), "white")
+        png_bytes = BytesIO()
+        jpeg_bytes = BytesIO()
+        original.save(png_bytes, format="PNG")
+        original.save(jpeg_bytes, format="JPEG")
+        png_hash = bot._screenshot_image_hash(png_bytes.getvalue())
+        jpeg_hash = bot._screenshot_image_hash(jpeg_bytes.getvalue())
+        self.assertNotEqual(png_hash, jpeg_hash)
+
+        with patch.object(bot, "DB_PATH", self.root / "recompressed-images.sqlite3"):
+            self.assertTrue(bot._claim_screenshot_image_cooldown(42, png_hash, now=10))
+            self.assertTrue(bot._claim_screenshot_image_cooldown(42, jpeg_hash, now=11))
+
+    def test_concurrent_screenshot_image_cooldown_reserves_only_once(self):
+        db_path = self.root / "concurrent-image-cooldown.sqlite3"
+        image_hash = "c" * 64
+
+        async def scenario():
+            return await asyncio.gather(
+                *(
+                    asyncio.to_thread(
+                        bot._claim_screenshot_image_cooldown,
+                        333,
+                        image_hash,
+                        2000,
+                    )
+                    for _ in range(8)
+                )
+            )
+
+        with patch.object(bot, "DB_PATH", db_path):
+            results = asyncio.run(scenario())
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), 7)
+
+    def test_screenshot_image_cooldown_uses_supabase_rpc(self):
+        response = SimpleNamespace(data=True)
+        client = MagicMock()
+        client.rpc.return_value.execute.return_value = response
+        with patch.object(bot, "supabase_enabled", return_value=True), patch.object(
+            bot, "supabase_client", return_value=client
+        ):
+            self.assertTrue(bot._claim_screenshot_image_cooldown(12, "d" * 64))
+            response.data = False
+            self.assertFalse(bot._claim_screenshot_image_cooldown(12, "d" * 64))
+        client.rpc.assert_called_with(
+            "reserve_screenshot_image_cooldown",
+            {"p_user_id": 12, "p_image_hash": "d" * 64},
+        )
+
+    def test_screenshot_image_cooldown_falls_back_to_sqlite_on_supabase_error(self):
+        db_path = self.root / "supabase-cooldown-fallback.sqlite3"
+        image_hash = "e" * 64
+        with patch.object(bot, "DB_PATH", db_path), patch.object(
+            bot, "supabase_enabled", return_value=True
+        ), patch.object(
+            bot,
+            "supabase_client",
+            side_effect=RuntimeError("database unavailable"),
+        ), self.assertLogs("ipay-bot", level="WARNING") as logs:
+            self.assertTrue(bot._claim_screenshot_image_cooldown(89, image_hash))
+            self.assertFalse(bot._claim_screenshot_image_cooldown(89, image_hash))
+        self.assertIn("using local SQLite", "\n".join(logs.output))
+
     def test_screenshot_ocr_failure_is_logged_without_replying_or_logging_image_data(self):
         async def scenario():
             download = SimpleNamespace(
@@ -371,11 +524,52 @@ class BotTests(unittest.TestCase):
                 "to_thread",
                 new=AsyncMock(side_effect=RuntimeError("private-image-data")),
             ), self.assertLogs("ipay-bot", level="WARNING") as logs:
-                self.assertIsNone(await bot._read_screenshot_text(message, context))
+                self.assertIsNone(
+                    await bot._read_screenshot_text(
+                        message,
+                        context,
+                        image_bytes=b"private-image-data",
+                    )
+                )
             self.assertTrue(any("RuntimeError" in line for line in logs.output))
             self.assertNotIn("private-image-data", "\n".join(logs.output))
 
         asyncio.run(scenario())
+
+    def test_screenshot_download_rejects_oversized_images_before_download(self):
+        message = SimpleNamespace(
+            message_id=57,
+            photo=[
+                SimpleNamespace(
+                    file_id="large-photo",
+                    file_size=bot.MAX_SCREENSHOT_BYTES + 1,
+                )
+            ],
+            document=None,
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(get_file=AsyncMock()),
+        )
+        with self.assertLogs("ipay-bot", level="WARNING"):
+            result = asyncio.run(bot._download_screenshot_bytes(message, context))
+        self.assertIsNone(result)
+        context.bot.get_file.assert_not_awaited()
+
+    def test_screenshot_download_rejects_invalid_image_content(self):
+        telegram_file = SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=b"not-an-image")
+        )
+        message = SimpleNamespace(
+            message_id=58,
+            photo=[SimpleNamespace(file_id="bad-photo")],
+            document=None,
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(get_file=AsyncMock(return_value=telegram_file)),
+        )
+        with self.assertLogs("ipay-bot", level="WARNING"):
+            result = asyncio.run(bot._download_screenshot_bytes(message, context))
+        self.assertIsNone(result)
 
     def test_screenshot_ocr_logs_stages_without_logging_image_or_ocr_content(self):
         async def scenario():
@@ -390,8 +584,16 @@ class BotTests(unittest.TestCase):
                 photo=[SimpleNamespace(file_id="photo")],
                 document=None,
             )
+            image = MagicMock()
+            image.width = 640
+            image.height = 480
+            image.__enter__.return_value = image
+            image.__exit__.return_value = False
+            image.verify = Mock()
             with patch.dict("sys.modules", {
-                "PIL": SimpleNamespace(Image=object()),
+                "PIL": SimpleNamespace(Image=SimpleNamespace(
+                    open=Mock(return_value=image)
+                )),
                 "pytesseract": SimpleNamespace(),
             }), patch.object(
                 bot.asyncio,
@@ -428,7 +630,10 @@ class BotTests(unittest.TestCase):
                     effective_user=SimpleNamespace(id=user_id),
                 )
 
-            async def transcript(message, _context):
+            async def download_image(message, _context):
+                return message.photo[-1].file_id.encode("utf-8")
+
+            async def transcript(message, _context, image_bytes=None):
                 values = {
                     "unclear": "",
                     "ambiguous": "Locking 100 Quota 100",
@@ -441,7 +646,11 @@ class BotTests(unittest.TestCase):
                 await asyncio.sleep(0)
                 return values[message.photo[-1].file_id]
 
-            with patch.object(bot, "_read_screenshot_text", new=transcript):
+            with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=download_image,
+            ), patch.object(bot, "_read_screenshot_text", new=transcript):
                 unclear = make_update(21, 1, "unclear")
                 ambiguous = make_update(28, 1, "ambiguous")
                 unrelated = make_update(22, 1, "unrelated")
@@ -495,9 +704,17 @@ class BotTests(unittest.TestCase):
                 effective_chat=SimpleNamespace(id=-100, type="group"),
                 effective_user=SimpleNamespace(id=8),
             )
-            with patch.object(bot, "_read_screenshot_text", new=AsyncMock(
-                return_value="Withdrawal Locking 100 Quota -100 Balance 27"
-            )), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
+            with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=b"withdrawal-image"),
+            ), patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(
+                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                ),
+            ), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
                 await bot.group_screenshot_handler(update, context)
 
             context.bot.send_message.assert_awaited_once()
@@ -507,6 +724,207 @@ class BotTests(unittest.TestCase):
 
         with patch.object(bot, "DB_PATH", self.root / "image-documents.sqlite3"):
             asyncio.run(scenario())
+
+    def test_screenshot_duplicate_protection_covers_all_categories_across_groups(self):
+        categories = (
+            (
+                "Order INR Locking 100 Quota 104 Balance 5",
+                bot.ORDER_IMAGE_REPLIES,
+            ),
+            (
+                "Withdrawal Locking 100 Quota -100 Balance 27",
+                bot.WITHDRAWAL_IMAGE_REPLIES,
+            ),
+            (
+                "Withdrawal Pending transaction 100 Quota 100 Balance 27",
+                bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
+            ),
+        )
+
+        for index, (ocr_text, category_templates) in enumerate(categories):
+            with self.subTest(category=index):
+                context = SimpleNamespace(
+                    application=SimpleNamespace(bot_data={}),
+                    bot=SimpleNamespace(send_message=AsyncMock()),
+                )
+
+                def make_update(message_id, chat_id, as_document=False):
+                    return SimpleNamespace(
+                        effective_message=SimpleNamespace(
+                            message_id=message_id,
+                            photo=(
+                                []
+                                if as_document
+                                else [SimpleNamespace(file_id=f"image-{index}")]
+                            ),
+                            document=(
+                                SimpleNamespace(
+                                    file_id=f"image-{index}",
+                                    mime_type="image/png",
+                                )
+                                if as_document
+                                else None
+                            ),
+                        ),
+                        effective_chat=SimpleNamespace(
+                            id=chat_id,
+                            type="supergroup",
+                        ),
+                        effective_user=SimpleNamespace(id=501),
+                    )
+
+                updates = [
+                    make_update(800 + index * 2, -1000 - index),
+                    make_update(801 + index * 2, -2000 - index, as_document=True),
+                ]
+                ocr = AsyncMock(return_value=ocr_text)
+
+                async def scenario():
+                    await asyncio.gather(
+                        *(
+                            bot.group_screenshot_handler(update, context)
+                            for update in updates
+                        )
+                    )
+
+                with patch.object(
+                    bot,
+                    "DB_PATH",
+                    self.root / f"category-cooldown-{index}.sqlite3",
+                ), patch.object(
+                    bot,
+                    "_download_screenshot_bytes",
+                    new=AsyncMock(return_value=b"identical-image"),
+                ), patch.object(
+                    bot,
+                    "_read_screenshot_text",
+                    new=ocr,
+                ), patch.object(
+                    bot.random,
+                    "choice",
+                    side_effect=lambda choices: choices[0],
+                ):
+                    asyncio.run(scenario())
+
+                ocr.assert_awaited_once()
+                calls = context.bot.send_message.await_args_list
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(
+                    {
+                        call.kwargs["reply_to_message_id"]
+                        for call in calls
+                    },
+                    {update.effective_message.message_id for update in updates},
+                )
+                texts = [call.kwargs["text"] for call in calls]
+                self.assertEqual(
+                    sum(text in bot.DUPLICATE_IMAGE_WARNING_TEMPLATES for text in texts),
+                    1,
+                )
+                self.assertEqual(
+                    sum(text in category_templates for text in texts),
+                    1,
+                )
+
+    def test_five_repeated_image_uploads_run_ocr_only_once(self):
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+        )
+        updates = [
+            SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=900 + index,
+                    photo=[SimpleNamespace(file_id="same-image")],
+                    document=None,
+                ),
+                effective_chat=SimpleNamespace(id=-900, type="group"),
+                effective_user=SimpleNamespace(id=901),
+            )
+            for index in range(5)
+        ]
+        ocr = AsyncMock(
+            return_value="Order Locking 100 Quota 104 Balance 5"
+        )
+
+        async def scenario():
+            for update in updates:
+                await bot.group_screenshot_handler(update, context)
+
+        with patch.object(
+            bot,
+            "DB_PATH",
+            self.root / "five-duplicate-uploads.sqlite3",
+        ), patch.object(
+            bot,
+            "_download_screenshot_bytes",
+            new=AsyncMock(return_value=b"same-image-bytes"),
+        ), patch.object(
+            bot,
+            "_read_screenshot_text",
+            new=ocr,
+        ), patch.object(
+            bot.random,
+            "choice",
+            side_effect=lambda choices: choices[0],
+        ):
+            asyncio.run(scenario())
+
+        ocr.assert_awaited_once()
+        calls = context.bot.send_message.await_args_list
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(
+            sum(
+                call.kwargs["text"] in bot.DUPLICATE_IMAGE_WARNING_TEMPLATES
+                for call in calls
+            ),
+            4,
+        )
+        self.assertEqual(
+            {
+                call.kwargs["reply_to_message_id"]
+                for call in calls
+            },
+            {update.effective_message.message_id for update in updates},
+        )
+
+    def test_private_chat_screenshots_are_processed_and_replied_to(self):
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+        )
+        message = SimpleNamespace(
+            message_id=950,
+            photo=[SimpleNamespace(file_id="private-image")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=950, type="private"),
+            effective_user=SimpleNamespace(id=951),
+        )
+        with patch.object(
+            bot,
+            "DB_PATH",
+            self.root / "private-screenshot.sqlite3",
+        ), patch.object(
+            bot,
+            "_download_screenshot_bytes",
+            new=AsyncMock(return_value=b"private-image-bytes"),
+        ), patch.object(
+            bot,
+            "_read_screenshot_text",
+            new=AsyncMock(return_value="Withdrawal Locking 100 Quota -100 Balance 27"),
+        ), patch.object(
+            bot.random,
+            "choice",
+            side_effect=lambda choices: choices[0],
+        ):
+            asyncio.run(bot.group_screenshot_handler(update, context))
+
+        sent = context.bot.send_message.await_args.kwargs
+        self.assertEqual(sent["reply_to_message_id"], message.message_id)
+        self.assertIn(sent["text"], bot.WITHDRAWAL_IMAGE_REPLIES)
 
     def test_conflict_error_handler_stops_polling_cleanly(self):
         application = SimpleNamespace(stop_running=Mock())
@@ -888,11 +1306,71 @@ class BotTests(unittest.TestCase):
             bot=SimpleNamespace(set_my_commands=AsyncMock())
         )
         asyncio.run(bot._post_init(application))
-        commands = application.bot.set_my_commands.await_args.args[0]
+        self.assertEqual(application.bot.set_my_commands.await_count, 3)
+        published_commands = []
+        published_scopes = []
+        for call in application.bot.set_my_commands.await_args_list:
+            commands = call.args[0]
+            published_commands.append([command.command for command in commands])
+            published_scopes.append(call.kwargs["scope"].type)
         self.assertEqual(
-            [command.command for command in commands],
-            ["start", "boost"],
+            published_commands,
+            [["start", "boost"]] * 3,
         )
+        self.assertEqual(
+            published_scopes,
+            ["default", "all_private_chats", "all_group_chats"],
+        )
+        self.assertNotIn("hii", bot.BOOST_COMMANDS)
+
+    def test_boost_command_accepts_group_username_suffix_only_for_boost(self):
+        application = bot.build_application(
+            "dummy-telegram-token-for-tests",
+            guide=self.make_guide(),
+        )
+        handler = next(
+            handler
+            for handler in application.handlers[0]
+            if isinstance(handler, CommandHandler)
+            and handler.callback == bot.boost_command
+        )
+        telegram_bot = TelegramBot(
+            "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijk"
+        )
+        telegram_bot._bot_user = User(
+            id=123456,
+            first_name="iPAY",
+            is_bot=True,
+            username="Ipay00bot",
+        )
+
+        for text, expected_args in (
+            ("/boost 123456", ["123456"]),
+            ("/boost@Ipay00bot 123456", ["123456"]),
+            ("/hii@Ipay00bot 123456", None),
+            ("/hi@Ipay00bot", None),
+        ):
+            command = text.split()[0]
+            message = Message(
+                message_id=1,
+                date=datetime.now(timezone.utc),
+                chat=Chat(id=-100123, type="supergroup"),
+                text=text,
+                entities=[
+                    MessageEntity(
+                        type=MessageEntityType.BOT_COMMAND,
+                        offset=0,
+                        length=len(command),
+                    )
+                ],
+            )
+            message.set_bot(telegram_bot)
+            update = Update(update_id=1, message=message)
+            result = handler.check_update(update)
+            if expected_args is None:
+                self.assertIsNone(result, text)
+            else:
+                self.assertEqual(result[0], expected_args, text)
 
     def test_every_callback_action_runs(self):
         guide = self.make_guide()
@@ -2757,6 +3235,221 @@ class BotTests(unittest.TestCase):
                     ],
                 )
 
+    def test_boost_classifier_matches_curated_requests_and_ignores_chatter(self):
+        examples = (
+            ("ID-642273\nBoost sale Boss\n@Ipay811\n@Ipay800", bot.BOOST_SALE),
+            ("ID 642273\nBoost Sale", bot.BOOST_SALE),
+            ("UID: 642273\nBoost please", bot.BOOST_HELP_REQUEST),
+            ("642273\nBoost applied request", bot.BOOST_REQUEST),
+            ("ID-642273\nBoost sell boss\n@Ipay811", bot.BOOST_SALE),
+            ("642273\nNeed boost support", bot.BOOST_HELP_REQUEST),
+            ("Boss boost this user\nUID 642273", bot.BOOST_REQUEST),
+            ("Boost required\nID: 642273", bot.BOOST_REQUEST),
+            ("bost sale", bot.BOOST_SALE),
+            ("bo ost sale", bot.BOOST_SALE),
+            ("bo0st sale", bot.BOOST_SALE),
+            ("b00st sale", bot.BOOST_SALE),
+            ("boost sael", bot.BOOST_SALE),
+            ("boostt sale", bot.BOOST_SALE),
+            ("BOOST PLEASE", bot.BOOST_HELP_REQUEST),
+            ("boost plz", bot.BOOST_HELP_REQUEST),
+            ("boost details UID 642273", bot.BOOST_DETAILS),
+            ("boost applied", bot.BOOST_STATUS_QUERY),
+            ("boost completed", bot.BOOST_STATUS_QUERY),
+        )
+        false_positives = []
+        false_negatives = []
+        for text, expected_category in examples:
+            result = bot.classify_boost_message(text)
+            if result is None:
+                false_negatives.append(text)
+            elif result.category != expected_category:
+                self.fail(f"{text!r} classified as {result.category}, expected {expected_category}")
+            self.assertNotIn(
+                result.category if result else None,
+                {bot.BOOST_APPLIED, bot.BOOST_COMPLETED},
+            )
+
+        ordinary_messages = (
+            "How does boost work?",
+            "What does boost mean to the sales team?",
+            "I think this app boost is interesting",
+            "The boost sale was announced yesterday",
+        )
+        for text in ordinary_messages:
+            if bot.classify_boost_message(text) is not None:
+                false_positives.append(text)
+
+        self.assertEqual(false_positives, [])
+        self.assertEqual(false_negatives, [])
+
+    def test_boost_classifier_extracts_uid_and_usernames_safely(self):
+        result = bot.classify_boost_message(
+            "ID-642273\nBoost sale Boss\n@Ipay811\n@Ipay800\n@IPAY800"
+        )
+        self.assertEqual(result.uid, "642273")
+        self.assertEqual(
+            result.usernames,
+            ("@Ipay811", "@Ipay800", "@IPAY800"),
+        )
+
+        self.assertEqual(
+            bot.classify_boost_message("UID: 642273 boost sale").uid,
+            "642273",
+        )
+        self.assertEqual(
+            bot.classify_boost_message("ID 642273 boost sale").uid,
+            "642273",
+        )
+
+        invalid = bot.classify_boost_message("ID 12345 boost sale")
+        self.assertEqual(invalid.category, bot.BOOST_INVALID_UID)
+        self.assertEqual(invalid.uid_issue, "invalid")
+
+        ambiguous = bot.classify_boost_message("boost sale 642273 123456")
+        self.assertEqual(ambiguous.category, bot.BOOST_INVALID_UID)
+        self.assertEqual(ambiguous.uid_issue, "ambiguous")
+
+        labeled = bot.classify_boost_message("ID 642273 order 123456 boost sale")
+        self.assertEqual(labeled.uid, "642273")
+
+        username_only = bot.classify_boost_message("boost sale @Ipay811")
+        self.assertIsNone(username_only.uid)
+        self.assertEqual(username_only.uid_issue, "missing")
+        self.assertEqual(username_only.usernames, ("@Ipay811",))
+
+    def test_boost_message_claim_is_atomic_and_persistent(self):
+        db_path = self.root / "boost-message-claims.sqlite3"
+        with patch.object(bot, "DB_PATH", db_path):
+            self.assertTrue(bot._claim_boost_message(-100, 500))
+            schema_key = str(db_path.resolve())
+            bot._DB_INITIALIZED_PATHS.discard(schema_key)
+            self.assertFalse(bot._claim_boost_message(-100, 500))
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                claims = list(
+                    executor.map(
+                        lambda _: bot._claim_boost_message(-100, 501),
+                        range(16),
+                    )
+                )
+            self.assertEqual(sum(claims), 1)
+            self.assertTrue(bot._claim_boost_message(-101, 501))
+            self.assertTrue(bot._claim_boost_message(-100, 502))
+
+    def test_automatic_boost_replies_keep_mentions_and_never_confirm_completion(self):
+        async def scenario():
+            db_path = self.root / "automatic-boost.sqlite3"
+            message = SimpleNamespace(
+                text="ID-642273\nBoost sale Boss\n@Ipay811\n@Ipay800",
+                message_id=501,
+                chat_id=-100123,
+                reply_text=AsyncMock(),
+            )
+            chat = SimpleNamespace(id=-100123, type="supergroup")
+            user = SimpleNamespace(id=77, username="seller", first_name="Seller")
+            update = SimpleNamespace(
+                effective_message=message,
+                effective_chat=chat,
+                effective_user=user,
+            )
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={"guide": MagicMock()}),
+                args=[],
+            )
+            with (
+                patch.object(bot, "DB_PATH", db_path),
+                patch.object(bot, "record_boost_request") as record_request,
+                patch.object(bot, "reserve_boost_request") as reserve_request,
+                patch.object(bot, "save_user_uid") as save_uid,
+                patch.object(bot, "_save_question_event", new=AsyncMock()),
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]),
+            ):
+                await bot.ai_reply(update, context)
+
+            response = message.reply_text.await_args.args[0]
+            self.assertEqual(message.reply_text.await_count, 1)
+            self.assertIn("642273", response)
+            self.assertIn("@Ipay811", response)
+            self.assertIn("@Ipay800", response)
+            self.assertIn("Boost sale", response)
+            self.assertNotIn("applied successfully", response.lower())
+            record_request.assert_called_once()
+            reserve_request.assert_not_called()
+            save_uid.assert_not_called()
+
+            status_message = SimpleNamespace(
+                text="boost applied",
+                message_id=502,
+                chat_id=-100123,
+                reply_text=AsyncMock(),
+            )
+            status_update = SimpleNamespace(
+                effective_message=status_message,
+                effective_chat=chat,
+                effective_user=user,
+            )
+            with (
+                patch.object(bot, "DB_PATH", db_path),
+                patch.object(bot, "record_unanswered_question"),
+            ):
+                await bot.ai_reply(status_update, context)
+            status_response = status_message.reply_text.await_args.args[0]
+            self.assertIn("can't verify", status_response.lower())
+            self.assertNotIn("boost was applied successfully", status_response.lower())
+
+        asyncio.run(scenario())
+
+    def test_simultaneous_boost_messages_are_each_processed_but_duplicates_are_not(self):
+        async def scenario():
+            db_path = self.root / "concurrent-boost.sqlite3"
+            chat = SimpleNamespace(id=900, type="group")
+            user = SimpleNamespace(id=901, username="member", first_name="Member")
+            messages = [
+                SimpleNamespace(
+                    text=f"Need boost UID 64227{index}",
+                    message_id=600 + index,
+                    chat_id=900,
+                    reply_text=AsyncMock(),
+                )
+                for index in (3, 4)
+            ]
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={"guide": MagicMock()}),
+                args=[],
+            )
+            with (
+                patch.object(bot, "DB_PATH", db_path),
+                patch.object(bot, "record_boost_request") as record_request,
+                patch.object(bot, "_save_question_event", new=AsyncMock()),
+                patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]),
+            ):
+                updates = [
+                    SimpleNamespace(
+                        effective_message=message,
+                        effective_chat=chat,
+                        effective_user=user,
+                    )
+                    for message in messages
+                ]
+                await asyncio.gather(
+                    *(bot.ai_reply(update, context) for update in updates)
+                )
+                self.assertEqual(record_request.call_count, 2)
+                for message in messages:
+                    message.reply_text.assert_awaited_once()
+
+                duplicate = messages[0]
+                duplicate_update = updates[0]
+                await asyncio.gather(
+                    bot.ai_reply(duplicate_update, context),
+                    bot.ai_reply(duplicate_update, context),
+                )
+                self.assertEqual(record_request.call_count, 2)
+                duplicate.reply_text.assert_awaited_once()
+
+        asyncio.run(scenario())
+
     def test_boost_command_requires_six_digit_uid(self):
         message = SimpleNamespace(text="/boost 79098", reply_text=AsyncMock())
         update = SimpleNamespace(effective_message=message)
@@ -2938,9 +3631,11 @@ class BotTests(unittest.TestCase):
         update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=user)
         app = SimpleNamespace(bot_data={"guide": MagicMock()})
         context = SimpleNamespace(application=app)
-        with patch.object(bot, "save_user_uid"), \
+        with patch.object(bot, "DB_PATH", self.root / "boost-auto.sqlite3"), \
+                patch.object(bot, "save_user_uid"), \
                 patch.object(bot, "reserve_boost_request", return_value=0), \
                 patch.object(bot, "record_boost_request"), \
+                patch.object(bot, "_save_question_event", new=AsyncMock()), \
                 patch.object(bot.random, "choice", side_effect=lambda styles: styles[0]):
             asyncio.run(bot.ai_reply(update, context))
         message.reply_text.assert_awaited_once()
@@ -2958,7 +3653,9 @@ class BotTests(unittest.TestCase):
         app = SimpleNamespace(bot_data={"guide": MagicMock()})
         context = SimpleNamespace(application=app)
 
-        asyncio.run(bot.ai_reply(update, context))
+        with patch.object(bot, "DB_PATH", self.root / "boost-missing-uid.sqlite3"), \
+                patch.object(bot, "record_unanswered_question"):
+            asyncio.run(bot.ai_reply(update, context))
 
         message.reply_text.assert_awaited_once_with(bot.BOOST_UID_PROMPT)
         self.assertNotIn("cannot", message.reply_text.await_args.args[0].lower())
@@ -3058,9 +3755,11 @@ class BotTests(unittest.TestCase):
         app = SimpleNamespace(bot_data={"guide": MagicMock()})
         context = SimpleNamespace(application=app)
         with (
+            patch.object(bot, "DB_PATH", self.root / "boost-caption-idempotency.sqlite3"),
             patch.object(bot, "save_user_uid"),
             patch.object(bot, "reserve_boost_request", return_value=0),
             patch.object(bot, "record_boost_request"),
+            patch.object(bot, "_save_question_event", new=AsyncMock()),
         ):
             asyncio.run(bot.boost_caption_handler(update, context))
             asyncio.run(bot.ai_reply(update, context))

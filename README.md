@@ -15,29 +15,34 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    .\.venv\Scripts\python.exe bot.py
    ```
 
-   Automatic group screenshot replies use local OCR. Images are processed
-   locally and are not sent to the conversational AI service. The Docker image
+   Automatic private-chat and group screenshot replies use local OCR. Images
+   are processed locally and are not sent to the conversational AI service. The Docker image
    installs Tesseract at `/usr/bin/tesseract` and runs an actual generated-image
    OCR smoke test during the build; local hosts need Tesseract available on
    `PATH` or configured with `TESSERACT_CMD`.
 
-   For an existing Supabase project, review and approve
+   For an existing Supabase project, review and approve both
    [`supabase/migrations/20261114_screenshot_reply_claims.sql`](supabase/migrations/20261114_screenshot_reply_claims.sql)
-   before running it. Persistent duplicate prevention uses one metadata-only row
-   per classified screenshot and requires this table. Without it, automatic
-   group screenshot replies are skipped while other bot features remain available.
+   and [`supabase/migrations/20261114_screenshot_image_cooldowns.sql`](supabase/migrations/20261114_screenshot_image_cooldowns.sql)
+   before running them. The first provides persistent per-message processing
+   claims; the second atomically tracks exact-image SHA-256 cooldowns per
+   Telegram user for five minutes. Until the cooldown migration is applied,
+   the bot logs the Supabase RPC failure and falls back to local SQLite, which
+   does not provide cross-instance persistence.
 
 4. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
 
 ## Current bot architecture
 
-- `bot.py` owns Telegram command/message/callback handlers, guide replies, the boost cooldown, and configured-admin checks.
+- `bot.py` owns Telegram command/message/callback handlers, guide replies, Boost message classification, the `/boost` command cooldown, and configured-admin checks.
 - `guide.py`, `knowledge_base.md`, and `problem_resolutions.json` provide the existing guide and resolution content.
 - `question_intelligence.py` classifies relevant support messages, applies content redaction, stores individual records, groups similar reports, and creates complete date-range reports. It has SQLite parity for local development.
 - `supabase/schema.sql` is the full SQL Editor setup. `supabase/migrations/` contains additive migrations.
 - `supabase/functions/daily-question-report/` and `supabase/schedule_daily_report.sql` implement hosted report generation and delivery, independent of the Python bot process.
 
-The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot replies use local OCR and are sent only for clearly identified locked Order/Withdrawal screens or Withdrawal Pending status screens. Replies use `reply_to_message_id` and are atomically deduplicated by chat and message ID.
+The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot replies use local OCR and are sent only for clearly identified locked Order/Withdrawal screens or Withdrawal Pending status screens. Replies use `reply_to_message_id` and are atomically deduplicated by chat and message ID. Duplicate-image cooldowns use exact SHA-256 bytes per user across chats; resized or recompressed images are treated as different images.
+
+Boost text and media captions use normalized, explicit request patterns and require a single valid six-digit UID before returning the existing randomized acknowledgment. Status questions are directed to the iPAY app or Customer Support; user text alone is never treated as proof that a Boost was applied. Boost message IDs are atomically deduplicated in the bot's local SQLite database for 30 days. `/boost <UID>` remains available with its existing five-minute per-user cooldown.
 
 The bot uses Telegram long polling. A Render free instance can sleep when idle,
 so polling alone does not guarantee immediate responses; use an always-on
