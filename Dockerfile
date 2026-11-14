@@ -15,4 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
 
+RUN test -x /usr/bin/tesseract \
+    && /usr/bin/tesseract --version \
+    && REQUIRE_TESSERACT_TEST=1 python -m unittest discover -s tests -p test_ocr_integration.py -v
+
 CMD ["python", "bot.py"]

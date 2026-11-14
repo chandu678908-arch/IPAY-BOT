@@ -15,13 +15,17 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    .\.venv\Scripts\python.exe bot.py
    ```
 
-   Automatic group screenshot replies use local OCR. Install the Tesseract OCR
-   engine on the bot host and make its `tesseract` executable available on
-   `PATH`; the Python packages are included in `requirements.txt`. Images are
-   processed locally and are not sent to the conversational AI service.
+   Automatic group screenshot replies use local OCR. Images are processed
+   locally and are not sent to the conversational AI service. The Docker image
+   installs Tesseract at `/usr/bin/tesseract` and runs an actual generated-image
+   OCR smoke test during the build; local hosts need Tesseract available on
+   `PATH` or configured with `TESSERACT_CMD`.
 
-   On Docker deployments, set `TESSERACT_CMD=/usr/bin/tesseract`. The supplied
-   `Dockerfile` installs the native OCR executable and sets this value.
+   For an existing Supabase project, review and approve
+   [`supabase/migrations/20261114_screenshot_reply_claims.sql`](supabase/migrations/20261114_screenshot_reply_claims.sql)
+   before running it. Persistent duplicate prevention uses one metadata-only row
+   per classified screenshot and requires this table. Without it, automatic
+   group screenshot replies are skipped while other bot features remain available.
 
 4. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
 
@@ -33,7 +37,12 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
 - `supabase/schema.sql` is the full SQL Editor setup. `supabase/migrations/` contains additive migrations.
 - `supabase/functions/daily-question-report/` and `supabase/schedule_daily_report.sql` implement hosted report generation and delivery, independent of the Python bot process.
 
-The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot responses use `reply_to_message_id`, so Telegram anchors them to the uploaded image.
+The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot replies are sent only when local OCR clearly identifies a locked order or withdrawal, use `reply_to_message_id`, and are atomically deduplicated by chat and message ID.
+
+The bot uses Telegram long polling. A Render free instance can sleep when idle,
+so polling alone does not guarantee immediate responses; use an always-on
+deployment for production availability. The HTTP health endpoint is a status
+check, not a guarantee that a sleeping free instance will remain awake.
 
 ## Admin Telegram commands
 

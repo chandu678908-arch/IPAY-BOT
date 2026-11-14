@@ -308,6 +308,13 @@ create table if not exists public.bot_activity_logs (
 create index if not exists idx_bot_activity_type_time on public.bot_activity_logs(event_type,created_at desc);
 create index if not exists idx_bot_activity_severity_time on public.bot_activity_logs(severity,created_at desc);
 
+create table if not exists public.handled_screenshot_messages (
+    chat_id bigint not null,
+    message_id bigint not null,
+    created_at timestamptz not null default now(),
+    primary key (chat_id, message_id)
+);
+
 alter table public.problem_categories enable row level security;
 alter table public.problem_clusters enable row level security;
 alter table public.question_events enable row level security;
@@ -319,13 +326,16 @@ alter table public.question_resolutions enable row level security;
 alter table public.bot_knowledge_gaps enable row level security;
 alter table public.daily_reports enable row level security;
 alter table public.bot_activity_logs enable row level security;
+alter table public.handled_screenshot_messages enable row level security;
 
 revoke all on table public.problem_categories, public.problem_clusters, public.question_events,
     public.question_cluster_links, public.user_question_history, public.group_question_analytics,
     public.admin_notes, public.question_resolutions, public.bot_knowledge_gaps,
-    public.daily_reports, public.bot_activity_logs from anon, authenticated;
+    public.daily_reports, public.bot_activity_logs, public.handled_screenshot_messages
+    from anon, authenticated;
 grant all on table public.problem_categories, public.problem_clusters, public.question_events,
     public.question_cluster_links, public.user_question_history, public.group_question_analytics,
     public.admin_notes, public.question_resolutions, public.bot_knowledge_gaps,
-    public.daily_reports, public.bot_activity_logs to service_role;
+    public.daily_reports, public.bot_activity_logs, public.handled_screenshot_messages
+    to service_role;
 grant usage, select on all sequences in schema public to service_role;

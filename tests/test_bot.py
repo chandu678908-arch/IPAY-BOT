@@ -60,14 +60,26 @@ class BotTests(unittest.TestCase):
             ),
             "withdrawal",
         )
+        self.assertEqual(
+            bot._classify_locked_screenshot("Withdrawal Locking Locking Locking"),
+            "withdrawal",
+        )
+        self.assertEqual(bot._classify_locked_screenshot("Order Locking"), "order")
         self.assertIsNone(bot._classify_locked_screenshot("Locking 100 Quota 100"))
         self.assertIsNone(bot._classify_locked_screenshot("Order completed 100"))
 
     def test_locked_screenshot_templates_keep_category_specific_timing(self):
         self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 7)
         self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 7)
+        self.assertEqual(len(set(bot.ORDER_IMAGE_REPLIES)), 7)
+        self.assertEqual(len(set(bot.WITHDRAWAL_IMAGE_REPLIES)), 7)
         self.assertTrue(all("24 hours" in text for text in bot.ORDER_IMAGE_REPLIES))
         self.assertTrue(all("24 hours" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
+        self.assertTrue(all("24" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
+        self.assertTrue(all(
+            "🔄 Relink your locked order wallet to refresh the locked withdrawal." in text
+            for text in bot.WITHDRAWAL_IMAGE_REPLIES
+        ))
 
     def test_tesseract_ocr_honors_configured_executable(self):
         fake_pytesseract = SimpleNamespace(
@@ -140,11 +152,67 @@ class BotTests(unittest.TestCase):
                 second = context.bot.send_message.await_args.kwargs["text"]
                 self.assertNotEqual(first, second)
 
-        asyncio.run(scenario())
+        with patch.object(bot, "DB_PATH", self.root / "screenshot-replies.sqlite3"):
+            asyncio.run(scenario())
         self.assertGreaterEqual(
             bot.logging.getLogger("httpcore").getEffectiveLevel(),
             bot.logging.WARNING,
         )
+
+    def test_screenshot_reply_claim_persists_across_restart(self):
+        db_path = self.root / "screenshot-claims.sqlite3"
+        schema_key = str(db_path.resolve())
+        with patch.object(bot, "DB_PATH", db_path):
+            self.assertTrue(bot._claim_screenshot_reply(-100, 31))
+            bot._DB_INITIALIZED_PATHS.discard(schema_key)
+            self.assertFalse(bot._claim_screenshot_reply(-100, 31))
+            self.assertTrue(bot._claim_screenshot_reply(-100, 32))
+
+    def test_screenshot_claim_uses_atomic_supabase_upsert(self):
+        response = SimpleNamespace(data=[{"chat_id": -100, "message_id": 33}])
+        table = MagicMock()
+        table.upsert.return_value.execute.return_value = response
+        client = MagicMock()
+        client.table.return_value = table
+        with patch.object(bot, "supabase_enabled", return_value=True), patch.object(
+            bot, "supabase_client", return_value=client
+        ):
+            self.assertTrue(bot._claim_screenshot_reply(-100, 33))
+            response.data = []
+            self.assertFalse(bot._claim_screenshot_reply(-100, 33))
+        table.upsert.assert_called_with(
+            {"chat_id": -100, "message_id": 33},
+            on_conflict="chat_id,message_id",
+            ignore_duplicates=True,
+        )
+
+    def test_screenshot_ocr_failure_is_logged_without_replying_or_logging_image_data(self):
+        async def scenario():
+            download = SimpleNamespace(
+                download_as_bytearray=AsyncMock(return_value=b"private-image-data")
+            )
+            context = SimpleNamespace(
+                bot=SimpleNamespace(
+                    get_file=AsyncMock(return_value=download),
+                )
+            )
+            message = SimpleNamespace(
+                photo=[SimpleNamespace(file_id="photo")],
+                document=None,
+            )
+            with patch.dict("sys.modules", {
+                "PIL": SimpleNamespace(Image=object()),
+                "pytesseract": SimpleNamespace(),
+            }), patch.object(
+                bot.asyncio,
+                "to_thread",
+                new=AsyncMock(side_effect=RuntimeError("private-image-data")),
+            ), self.assertLogs("ipay-bot", level="WARNING") as logs:
+                self.assertIsNone(await bot._read_screenshot_text(message, context))
+            self.assertTrue(any("RuntimeError" in line for line in logs.output))
+            self.assertNotIn("private-image-data", "\n".join(logs.output))
+
+        asyncio.run(scenario())
 
     def test_group_screenshot_handler_handles_unclear_unrelated_and_concurrent_uploads(self):
         async def scenario():
@@ -167,6 +235,7 @@ class BotTests(unittest.TestCase):
             async def transcript(message, _context):
                 values = {
                     "unclear": "",
+                    "ambiguous": "Locking 100 Quota 100",
                     "unrelated": "Holiday photo at the beach",
                     "order-a": "Order INR Locking 100 Quota 104 Balance 5",
                     "withdrawal-a": "Withdrawal Locking 100 Quota -100 Balance 27",
@@ -178,14 +247,14 @@ class BotTests(unittest.TestCase):
 
             with patch.object(bot, "_read_screenshot_text", new=transcript):
                 unclear = make_update(21, 1, "unclear")
+                ambiguous = make_update(28, 1, "ambiguous")
                 unrelated = make_update(22, 1, "unrelated")
                 await bot.group_screenshot_handler(unclear, context)
-                self.assertEqual(context.bot.send_message.await_count, 1)
-                self.assertEqual(
-                    context.bot.send_message.await_args.kwargs["reply_to_message_id"], 21
-                )
+                self.assertEqual(context.bot.send_message.await_count, 0)
+                await bot.group_screenshot_handler(ambiguous, context)
+                self.assertEqual(context.bot.send_message.await_count, 0)
                 await bot.group_screenshot_handler(unrelated, context)
-                self.assertEqual(context.bot.send_message.await_count, 1)
+                self.assertEqual(context.bot.send_message.await_count, 0)
 
                 uploads = [
                     make_update(23, 2, "order-a"),
@@ -196,14 +265,52 @@ class BotTests(unittest.TestCase):
                 await asyncio.gather(*[
                     bot.group_screenshot_handler(update, context) for update in uploads
                 ])
+                duplicate_uploads = [
+                    make_update(27, 6, "order-a"),
+                    make_update(27, 6, "order-a"),
+                ]
+                await asyncio.gather(*[
+                    bot.group_screenshot_handler(update, context)
+                    for update in duplicate_uploads
+                ])
                 self.assertEqual(context.bot.send_message.await_count, 5)
                 reply_ids = {
                     call.kwargs["reply_to_message_id"]
                     for call in context.bot.send_message.await_args_list
                 }
-                self.assertEqual(reply_ids, {21, 23, 24, 25, 26})
+                self.assertEqual(reply_ids, {23, 24, 25, 26, 27})
 
-        asyncio.run(scenario())
+        with patch.object(bot, "DB_PATH", self.root / "concurrent-screenshots.sqlite3"):
+            asyncio.run(scenario())
+
+    def test_group_screenshot_handler_accepts_image_documents(self):
+        async def scenario():
+            context = SimpleNamespace(
+                application=SimpleNamespace(bot_data={}),
+                bot=SimpleNamespace(send_message=AsyncMock()),
+            )
+            message = SimpleNamespace(
+                message_id=41,
+                photo=[],
+                document=SimpleNamespace(file_id="image-document", mime_type="image/png"),
+            )
+            update = SimpleNamespace(
+                effective_message=message,
+                effective_chat=SimpleNamespace(id=-100, type="group"),
+                effective_user=SimpleNamespace(id=8),
+            )
+            with patch.object(bot, "_read_screenshot_text", new=AsyncMock(
+                return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+            )), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
+                await bot.group_screenshot_handler(update, context)
+
+            context.bot.send_message.assert_awaited_once()
+            sent = context.bot.send_message.await_args.kwargs
+            self.assertEqual(sent["reply_to_message_id"], 41)
+            self.assertIn(sent["text"], bot.WITHDRAWAL_IMAGE_REPLIES)
+
+        with patch.object(bot, "DB_PATH", self.root / "image-documents.sqlite3"):
+            asyncio.run(scenario())
 
     def test_conflict_error_handler_stops_polling_cleanly(self):
         application = SimpleNamespace(stop_running=Mock())
@@ -537,6 +644,13 @@ class BotTests(unittest.TestCase):
         self.assertEqual(len(caption_handlers), 1)
         self.assertEqual(caption_handlers[0].callback, bot.boost_caption_handler)
         self.assertEqual(len(application.handlers[0]), 14)
+        screenshot_handlers = [
+            handler
+            for handler in application.handlers[-2]
+            if isinstance(handler, MessageHandler)
+        ]
+        self.assertEqual(len(screenshot_handlers), 1)
+        self.assertEqual(screenshot_handlers[0].callback, bot.group_screenshot_handler)
         self.assertEqual(application.handlers[1][0].callback, bot.ai_reply)
         self.assertEqual(application.handlers[-1][0].callback, bot.activity_handler)
 
