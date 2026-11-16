@@ -222,11 +222,28 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             bot._classify_locked_screenshot(order_transition), "order"
         )
+        # A forwarded/compressed screenshot can lose its page heading. The
+        # distinctive order field set must still win if OCR also invents an
+        # unrelated "Withdrawal" token.
+        order_transition_ocr = (
+            order_transition.replace("Transition Information ", "")
+            + " Withdrawal"
+        )
+        self.assertEqual(bot._classify_screenshot(order_transition_ocr), "order")
+        self.assertEqual(
+            bot._classify_locked_screenshot(order_transition_ocr), "order"
+        )
         self.assertEqual(
             bot._classify_screenshot(withdrawal_transition), "withdrawal"
         )
         self.assertEqual(
             bot._classify_locked_screenshot(withdrawal_transition), "withdrawal"
+        )
+        withdrawal_transition_ocr = withdrawal_transition.replace(
+            "Transition Information ", ""
+        )
+        self.assertEqual(
+            bot._classify_screenshot(withdrawal_transition_ocr), "withdrawal"
         )
 
         # The low-resolution withdrawal layout has recurring OCR confusions:

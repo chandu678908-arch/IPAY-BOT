@@ -1980,10 +1980,6 @@ def _normalize_transition_information_ocr(normalized_text: str) -> str:
 
 def _is_transition_information_order_lock(normalized_text: str) -> bool:
     """Recognize the order-side Transition Information locking layout."""
-    if not _is_transition_information_layout(normalized_text):
-        return False
-    if re.search(r"\bwithdraw(?:al)?\b", normalized_text):
-        return False
     identifiers = (
         re.search(r"\btask\s+id\b", normalized_text),
         re.search(r"\border\s+id\b", normalized_text),
@@ -2003,8 +1999,6 @@ def _is_transition_information_order_lock(normalized_text: str) -> bool:
 
 def _is_transition_information_withdrawal_lock(normalized_text: str) -> bool:
     """Recognize the withdrawal-side Transition Information locking layout."""
-    if not _is_transition_information_layout(normalized_text):
-        return False
     identifiers = (
         re.search(r"\btask\s+id\b", normalized_text),
         re.search(r"\border\s+id\b", normalized_text),
@@ -2024,13 +2018,34 @@ def _is_transition_information_withdrawal_lock(normalized_text: str) -> bool:
 
 def _classify_transition_information_lock(text: str) -> Optional[str]:
     normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold())
-    if not _is_transition_information_layout(normalized):
-        return None
     normalized = _normalize_transition_information_ocr(normalized)
-    if _is_transition_information_withdrawal_lock(normalized):
-        return "withdrawal"
+    has_transition_heading = _is_transition_information_layout(normalized)
+    if not has_transition_heading:
+        # Do not let a regular task-payment screen become a transition-lock
+        # classification just because OCR found generic locking words. When
+        # the title itself was missed, require the stronger transition-screen
+        # controls as well as the complete category-specific field set.
+        has_go_to_transfer = bool(re.search(r"\bgo\s+to\s+transfer\b", normalized))
+        if (
+            _is_transition_information_order_lock(normalized)
+            and not has_go_to_transfer
+            and re.search(r"\bok\b", normalized)
+            and re.search(r"\bpaid\b", normalized)
+        ):
+            return "order"
+        if (
+            _is_transition_information_withdrawal_lock(normalized)
+            and re.search(r"\bok\b", normalized)
+        ):
+            return "withdrawal"
+        return None
+    # The complete, distinctive field sets are stronger than a possibly
+    # misread page heading. Check the order layout first so an OCR false
+    # positive for "withdrawal" cannot steal a payment-task order screenshot.
     if _is_transition_information_order_lock(normalized):
         return "order"
+    if _is_transition_information_withdrawal_lock(normalized):
+        return "withdrawal"
     return None
 
 
@@ -2096,8 +2111,11 @@ def _has_withdrawal_lock_status_context(normalized_text: str) -> bool:
 def _classify_locked_screenshot(text: str) -> Optional[str]:
     """Require a transaction-specific locking status and supporting record fields."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    transition_category = _classify_transition_information_lock(text)
+    if transition_category:
+        return transition_category
     if _is_transition_information_layout(normalized):
-        return _classify_transition_information_lock(text)
+        return None
     if _is_order_payment_task_layout(text):
         if (
             re.search(r"\bwithdraw(?:al)?\b", normalized)
@@ -2138,8 +2156,11 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
 def _classify_screenshot(text: str) -> Optional[str]:
     """Classify only transaction-specific locking and pending status evidence."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    transition_category = _classify_transition_information_lock(text)
+    if transition_category:
+        return transition_category
     if _is_transition_information_layout(normalized):
-        return _classify_transition_information_lock(text)
+        return None
     order_heading = bool(re.search(r"\border\b", normalized))
     withdrawal_heading = bool(re.search(r"\bwithdrawal\b", normalized))
     if _is_order_payment_task_layout(text) and (
