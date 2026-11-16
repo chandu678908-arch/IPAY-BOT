@@ -1616,13 +1616,92 @@ async def activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 ORDER_IMAGE_REPLIES = (
-    "◆ iPAY – ORDER STATUS\n\n▪️ Check order validity and payment details.\n▪️ Do not use Pocket UPI.\n🔄 Relink your iPAY wallet to refresh the locked order.\n▪️ Wait for wallet verification and system processing.\n\n⏰ Allow up to 24 hours.\n📞 Contact CS if the order is still unprocessed.\n\n◆ STAY UPDATED!",
-    "◆ iPAY – LOCKED ORDER UPDATE\n\n▪️ Verify your order and payment details.\n▪️ Use only your iPAY-linked wallet. Do not use Pocket UPI.\n🔄 Reconnect your iPAY wallet to refresh the order.\n▪️ Allow the system to verify your wallet and process the request.\n\n⏰ Please allow up to 24 hours.\n📞 Contact CS if it remains unprocessed.\n\n◆ THANK YOU!",
-    "◆ iPAY – ORDER SUPPORT\n\n▪️ First, check your order status and payment information.\n▪️ Pocket UPI is not supported.\n🔄 Relink your iPAY wallet for order refresh.\n▪️ Wait while the system verifies the wallet connection and processes the order.\n\n⏰ Processing may take up to 24 hours.\n📞 Reach out to CS if the order is not processed.\n\n◆ KEEP CHECKING YOUR STATUS!",
-    "◆ iPAY – ORDER PROCESS\n\n1️⃣ Check order validity and payment details.\n2️⃣ Do not use Pocket UPI.\n3️⃣ Relink your iPAY wallet to refresh the locked order.\n4️⃣ Wait for wallet verification and system processing.\n\n⏰ Allow up to 24 hours for processing.\n📞 If still unprocessed, contact CS.\n\n◆ FOLLOW THE STEPS!",
-    "◆ iPAY – IMPORTANT ORDER NOTICE\n\n▪️ Make sure your order and payment details are correct.\n▪️ Always use your iPAY-linked wallet, not Pocket UPI.\n🔄 Reconnect your wallet to refresh the locked order.\n▪️ The system will verify the wallet and process the request.\n\n⏰ Please allow up to 24 hours.\n📞 Contact CS if the order remains unprocessed.\n\n◆ STAY INFORMED!",
-    "◆ iPAY – ORDER PROCESSING\n\n▪️ Confirm the order is valid and the payment details match.\n▪️ Use your iPAY-linked wallet; Pocket UPI is not supported.\n🔄 Reconnect your wallet to refresh the locked order.\n▪️ Wait for wallet verification and processing to finish.\n\n⏰ Please allow up to 24 hours for processing.\n📞 Contact Customer Support if the order is still pending.\n\n◆ WE'RE HERE TO HELP!",
-    "◆ iPAY – ORDER VERIFICATION\n\n▪️ Review your order validity and payment details.\n▪️ Pocket UPI must not be used.\n🔄 Relink your iPAY wallet to initiate the order refresh.\n▪️ Allow the system to verify the wallet connection and complete processing.\n\n⏰ Please allow up to 24 hours for the update.\n📞 Contact iPAY Customer Support if the order remains unprocessed.\n\n◆ iPAY SUPPORT – STAY UPDATED!",
+    "◆ iPAY – ORDER LOCKED UPDATE\n\n"
+    "⚠️ Possible causes:\n"
+    "▪️ Wallet logout during transactions.\n"
+    "▪️ Connection interruptions.\n"
+    "▪️ Bank daily limit reached.\n\n"
+    "🔄 Relink your wallet and verify your UPI and bank account.\n"
+    "▪️ Check your bank transaction limits.\n\n"
+    "⏳ Allow up to 24 hours for processing.\n"
+    "📞 Still locked? Contact Support with Order ID and UID.\n\n"
+    "◆ STAY UPDATED!",
+    "◆ iPAY – LOCKED ORDER GUIDANCE\n\n"
+    "⚠️ Your order may be affected by:\n"
+    "▪️ Unstable wallet connection.\n"
+    "▪️ Wallet logout during processing.\n"
+    "▪️ Bank receiving limit reached.\n\n"
+    "🔄 SOLUTIONS:\n"
+    "▪️ Check your bank limits.\n"
+    "▪️ Ensure UPI and bank account are active.\n"
+    "▪️ Relink your wallet.\n\n"
+    "⏳ Allow 24 hours for verification.\n"
+    "📞 Contact Support with Order ID and UID if unresolved.",
+    "◆ iPAY – ORDER STATUS NOTICE\n\n"
+    "🔒 Order locking may occur due to wallet disconnection, logout during transactions, or bank limits.\n\n"
+    "🔄 Please relink your wallet and ensure your UPI ID and bank account are active.\n\n"
+    "▪️ Verify your daily bank transaction limits.\n\n"
+    "⏳ Allow up to 24 hours for processing.\n"
+    "📞 If unresolved, share your Order ID and UID with Support.\n\n"
+    "◆ CHECK • RELINK • VERIFY!",
+    "◆ iPAY – ORDER LOCK SUPPORT\n\n"
+    "⚠️ CHECK THESE:\n"
+    "▪️ Wallet connection stability.\n"
+    "▪️ Active UPI and bank account.\n"
+    "▪️ Daily bank transaction limits.\n"
+    "▪️ Wallet logout during an active transaction.\n\n"
+    "🔄 Relink your wallet to refresh the connection.\n\n"
+    "⏳ Allow up to 24 hours for system processing.\n"
+    "📞 Contact Support with Order ID and UID if still locked.",
+    "◆ iPAY – IMPORTANT ORDER GUIDANCE\n\n"
+    "🔒 Orders may lock due to interrupted connections, wallet logout, or exceeded bank limits.\n\n"
+    "🔄 ACTION REQUIRED:\n"
+    "▪️ Relink your wallet.\n"
+    "▪️ Verify your UPI and bank account.\n"
+    "▪️ Check daily receiving limits.\n\n"
+    "⏳ Wait up to 24 hours for verification and processing.\n\n"
+    "📞 Contact Customer Support with your Order ID and UID if the issue continues.",
+    "◆ iPAY – LOCKED ORDER UPDATE\n\n"
+    "⚠️ Possible reasons:\n"
+    "▪️ Bank transaction limit reached.\n"
+    "▪️ Wallet disconnected during processing.\n"
+    "▪️ Wallet logout during an active transaction.\n\n"
+    "🔄 Restore your wallet connection and verify your linked UPI and bank account.\n\n"
+    "▪️ Check your bank limits.\n\n"
+    "⏳ Allow 24 hours for processing.\n"
+    "📞 Still locked? Contact Support with Order ID and UID.",
+    "◆ iPAY – ORDER VERIFICATION\n\n"
+    "🔄 Please complete these checks:\n"
+    "▪️ Relink your wallet.\n"
+    "▪️ Confirm your UPI and bank account are active.\n"
+    "▪️ Check your bank's daily limits.\n\n"
+    "⚠️ Wallet logout or an unstable connection during transactions may cause locking.\n\n"
+    "⏳ Allow up to 24 hours for processing.\n"
+    "📞 Contact Support with Order ID and UID if unresolved.",
+    "◆ iPAY – ORDER LOCK NOTICE\n\n"
+    "⚠️ Check whether:\n"
+    "▪️ Your wallet was logged out during a transaction.\n"
+    "▪️ Your wallet connection was interrupted.\n"
+    "▪️ Your bank limit was reached.\n\n"
+    "🔄 Relink your wallet and verify your bank and UPI details.\n\n"
+    "⏳ Allow up to 24 hours for system verification.\n"
+    "📞 If still locked, contact Support with Order ID and UID.",
+    "◆ iPAY – ORDER PROCESSING GUIDE\n\n"
+    "🔒 A locked order may involve wallet disconnection, transaction-time logout, or bank limit issues.\n\n"
+    "▪️ Ensure your bank account and UPI are active.\n"
+    "▪️ Check your daily transaction limits.\n"
+    "▪️ Relink your wallet to refresh the connection.\n\n"
+    "⏳ Allow up to 24 hours for processing.\n\n"
+    "📞 For further help, share your Order ID and UID with Support.",
+    "◆ iPAY – ORDER LOCKED ASSISTANCE\n\n"
+    "⚠️ IMPORTANT CHECKS:\n"
+    "▪️ Active wallet connection.\n"
+    "▪️ No logout during transactions.\n"
+    "▪️ Bank daily transaction and receiving limits.\n\n"
+    "🔄 Relink your wallet and verify your UPI and bank account.\n\n"
+    "⏳ Allow up to 24 hours for verification and processing.\n"
+    "📞 If the order remains locked, contact Support with Order ID and UID.\n\n"
+    "◆ CHECK • RELINK • STAY UPDATED!",
 )
 
 WITHDRAWAL_IMAGE_REPLIES = (
