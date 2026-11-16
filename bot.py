@@ -190,8 +190,8 @@ SUPABASE_SECRET_KEY = (
 RATE_LIMIT_SECONDS = max(0.5, float(os.getenv("RATE_LIMIT_SECONDS", "2")))
 BOOST_COOLDOWN_SECONDS = 5 * 60
 BOOST_UID_PROMPT = (
-    "📌 To send your withdrawal boost details, use /boost followed by your "
-    "six-digit iPAY UID (example: /boost 123456)."
+    "📌 To send your withdrawal boost details, use <code>/boost</code> followed by your "
+    "six-digit iPAY UID (example: <code>/boost 123456</code>)."
 )
 REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 ISSUE_SPIKE_CHAT_ID = os.getenv("ISSUE_SPIKE_CHAT_ID", "").strip()
@@ -2909,8 +2909,18 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             message.message_id,
         )
         return
+    strict_transition_category = _classify_transition_information_lock(ocr_text)
+    strict_transition_match = strict_transition_category == category
     gemini_client = context.application.bot_data.get("gemini_client")
-    if gemini_client:
+    if gemini_client and strict_transition_match:
+        log.info(
+            "Using strict Transition Information OCR classification without "
+            "Gemini override (chat_id=%s, message_id=%s, category=%s)",
+            chat.id,
+            message.message_id,
+            category,
+        )
+    elif gemini_client:
         vision_confirmed = await _gemini_confirms_screenshot_category(
             gemini_client,
             image_bytes,
@@ -3616,7 +3626,7 @@ async def _handle_boost_message(
             )
             if classification.usernames:
                 response += _boost_classification_context(classification)
-        if "<b>" in response:
+        if "<b>" in response or "<code>" in response:
             await message.reply_text(response, parse_mode="HTML")
         else:
             await message.reply_text(response)
@@ -3655,7 +3665,7 @@ async def boost_command(
     args = getattr(context, "args", []) or []
     uid = args[0].strip("#:, -") if len(args) == 1 else ""
     if not re.fullmatch(r"\d{6}", uid):
-        await message.reply_text(BOOST_UID_PROMPT)
+        await message.reply_text(BOOST_UID_PROMPT, parse_mode="HTML")
         return
 
     user = getattr(update, "effective_user", None)

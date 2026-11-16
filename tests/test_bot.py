@@ -4461,9 +4461,14 @@ class BotTests(unittest.TestCase):
         update = SimpleNamespace(effective_message=message)
         context = SimpleNamespace(args=["79098"])
         asyncio.run(bot.boost_command(update, context))
-        message.reply_text.assert_awaited_once()
+        message.reply_text.assert_awaited_once_with(
+            bot.BOOST_UID_PROMPT,
+            parse_mode="HTML",
+        )
         self.assertIn("six-digit iPAY UID", message.reply_text.await_args.args[0])
         self.assertNotIn("invalid", message.reply_text.await_args.args[0].lower())
+        self.assertIn("<code>/boost</code>", bot.BOOST_UID_PROMPT)
+        self.assertIn("<code>/boost 123456</code>", bot.BOOST_UID_PROMPT)
 
     def test_boost_command_limits_each_user_to_one_request_per_five_minutes(self):
         db_path = self.root / "boost-cooldowns.sqlite3"
@@ -4663,7 +4668,10 @@ class BotTests(unittest.TestCase):
                 patch.object(bot, "record_unanswered_question"):
             asyncio.run(bot.ai_reply(update, context))
 
-        message.reply_text.assert_awaited_once_with(bot.BOOST_UID_PROMPT)
+        message.reply_text.assert_awaited_once_with(
+            bot.BOOST_UID_PROMPT,
+            parse_mode="HTML",
+        )
         self.assertNotIn("cannot", message.reply_text.await_args.args[0].lower())
         self.assertNotIn("contact support", message.reply_text.await_args.args[0].lower())
 
