@@ -1960,7 +1960,14 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
         return None
     order_heading = bool(re.search(r"\border\b", normalized))
     withdrawal_heading = bool(re.search(r"\bwithdraw(?:al)?\b", normalized))
-    if order_heading == withdrawal_heading:
+    if order_heading and withdrawal_heading:
+        return None
+    order_record_context = bool(
+        re.search(r"\b(?:inr|usdt)\b", normalized)
+        and re.search(r"\b(?:income|activity)\b", normalized)
+        and re.search(r"\b(?:feedback received|waiting for processing)\b", normalized)
+    )
+    if not withdrawal_heading and not order_heading and not order_record_context:
         return None
     has_record_fields = bool(
         re.search(r"\b(?:quota|balance|amount|transaction|upi|bank)\b", normalized)
@@ -1974,7 +1981,7 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
     )
     if not (has_record_fields or has_locking_amount):
         return None
-    return "order" if order_heading else "withdrawal"
+    return "withdrawal" if withdrawal_heading else "order"
 
 
 def _classify_screenshot(text: str) -> Optional[str]:

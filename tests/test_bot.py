@@ -78,6 +78,19 @@ class BotTests(unittest.TestCase):
             "order",
         )
         self.assertEqual(
+            bot._classify_locked_screenshot(
+                "INR USDT Locking Income 13.2 Activity Quota 345.20 "
+                "Balance 10 Feedback received, waiting for processing"
+            ),
+            "order",
+        )
+        self.assertIsNone(
+            bot._classify_locked_screenshot(
+                "INR USDT Income Activity Quota 345.20 Balance 10 "
+                "Feedback received, waiting for processing"
+            )
+        )
+        self.assertEqual(
             bot._classify_locked_screenshot("Withdrawal Locking Locking Locking"),
             None,
         )
