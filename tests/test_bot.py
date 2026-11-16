@@ -209,6 +209,15 @@ class BotTests(unittest.TestCase):
             bot._classify_screenshot(reference_ocr),
             "withdrawal_pending",
         )
+        multi_row_pending_ocr = (
+            "Withdrawal 01/01/2026 - 02/01/2026 Pending "
+            "50.00 Quota -50.00 Balance 20.00 "
+            "25.00 Pending Quota -25.00 Balance 45.00"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(multi_row_pending_ocr),
+            "withdrawal_pending",
+        )
         self.assertIsNone(bot._classify_screenshot("Withdrawal Pending"))
         self.assertIsNone(
             bot._classify_screenshot(
