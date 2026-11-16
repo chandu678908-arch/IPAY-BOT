@@ -104,11 +104,104 @@ class BotTests(unittest.TestCase):
             "Account balance 1500 Deposit Withdraw Wallet Menu Transaction history",
             "Withdraw option Wallet Balance 200.00 Pending deposit transaction",
             "Order menu Withdraw Deposit Balance Account History",
+            "iPAY dashboard Withdrawal menu Boost Sell payment transfer amount "
+            "1500.00 balance 2000 profile account UPI bank locking notification",
+            "Please sell /boost withdrawal ni ho rha",
         )
         for screenshot_text in dashboard_cases:
             with self.subTest(screenshot_text=screenshot_text):
                 self.assertIsNone(bot._classify_screenshot(screenshot_text))
                 self.assertIsNone(bot._classify_locked_screenshot(screenshot_text))
+
+    def test_withdrawal_lock_requires_nearby_transaction_status_evidence(self):
+        genuine_withdrawal = (
+            "Withdrawal Locking 100.00 Quota -100.00 Balance 27.4"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(genuine_withdrawal), "withdrawal"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(
+                "Locking Withdrawal 100.00 Quota -100.00 Balance 27.4"
+            ),
+            "withdrawal",
+        )
+
+        dashboard_with_unrelated_locking = (
+            "iPAY Dashboard Withdrawal menu Boost Sell Payment Transfer "
+            "Amount 1500.00 Balance 2000 Profile Account UPI Bank "
+            "Locking notification"
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(dashboard_with_unrelated_locking)
+        )
+        self.assertIsNone(
+            bot._classify_screenshot("Please sell /boost withdrawal ni ho rha")
+        )
+
+    def test_task_payment_layout_excludes_withdrawal_and_requires_order_lock_status(self):
+        screenshot_ocr = (
+            "Task ID po_4491681794076475052955485 Order ID 749DFDC051 "
+            "UTR Expire Time 00:14:35 08/11/2026 Pay via bank name mobikwik "
+            "Payer VPA 9852069804@mbkns Payer Card ID 449168_1791565314704 "
+            "Payee Account ****0783 Payee Name KULDEEP KANTILAL SUTHAR "
+            "Payee IFSC ****RAXX Amount 1500.00 "
+            "Go to transfer (09:02) Paid"
+        )
+        self.assertIsNone(bot._classify_screenshot(screenshot_ocr))
+        self.assertIsNone(bot._classify_locked_screenshot(screenshot_ocr))
+
+        # UTR may be empty, IDs/amount/bank may vary, and masked values are valid.
+        changed_values = screenshot_ocr.replace(
+            "po_4491681794076475052955485", "po_123456789"
+        ).replace("749DFDC051", "9988ABCD").replace(
+            "mobikwik", "another bank"
+        ).replace("1500.00", "25.50").replace(
+            "00:14:35 08/11/2026", "99:59:59 09/12/2028"
+        )
+        self.assertIsNone(bot._classify_screenshot(changed_values))
+        without_utr = screenshot_ocr.replace("UTR ", "")
+        self.assertIsNone(bot._classify_screenshot(without_utr))
+
+        # Only an explicit order-lock status raises this layout to ORDER_LOCKED.
+        confirmed_order_lock = screenshot_ocr + " Order Locked"
+        self.assertEqual(bot._classify_screenshot(confirmed_order_lock), "order")
+        self.assertEqual(
+            bot._classify_screenshot(changed_values + " Order Locked"), "order"
+        )
+        self.assertEqual(
+            bot._classify_locked_screenshot(confirmed_order_lock), "order"
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(screenshot_ocr + " Withdrawal Locking")
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(screenshot_ocr + " Withdrawal Pending")
+        )
+
+        # One or two isolated indicators must not classify as a locked order.
+        for partial in (
+            "Task ID 123 Order ID 456 Go to transfer Paid",
+            "Task ID 123 Order ID 456 Payer VPA Payer Card ID",
+            "Go to transfer Paid Amount 1500.00",
+        ):
+            with self.subTest(partial=partial):
+                self.assertIsNone(bot._classify_screenshot(partial))
+
+        bot_data = {}
+        with patch.object(
+            bot.random,
+            "choice",
+            side_effect=lambda choices: choices[0],
+        ) as choose:
+            selected = bot._select_category_reply(
+                bot.ORDER_IMAGE_REPLIES,
+                bot_data,
+                "screenshot_reply_choice:-100:7:order",
+            )
+        self.assertIn(selected, bot.ORDER_IMAGE_REPLIES)
+        self.assertNotIn(selected, bot.WITHDRAWAL_IMAGE_REPLIES)
+        self.assertEqual(list(choose.call_args.args[0]), list(bot.ORDER_IMAGE_REPLIES))
 
     def test_gemini_vision_must_agree_with_validated_ocr_candidate(self):
         image_buffer = BytesIO()
@@ -366,9 +459,9 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(bot.ORDER_IMAGE_REPLIES, expected_order_replies)
         self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 10)
-        self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 7)
+        self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 10)
         self.assertEqual(len(set(bot.ORDER_IMAGE_REPLIES)), 10)
-        self.assertEqual(len(set(bot.WITHDRAWAL_IMAGE_REPLIES)), 7)
+        self.assertEqual(len(set(bot.WITHDRAWAL_IMAGE_REPLIES)), 10)
         self.assertTrue(
             set(bot.ORDER_IMAGE_REPLIES).isdisjoint(bot.WITHDRAWAL_IMAGE_REPLIES)
         )
@@ -382,10 +475,11 @@ class BotTests(unittest.TestCase):
             bot.ORDER_IMAGE_REPLIES,
         )
         self.assertTrue(all("24 hours" in text for text in bot.ORDER_IMAGE_REPLIES))
-        self.assertTrue(all("24 hours" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
-        self.assertTrue(all("24" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
+        self.assertTrue(all("24 hours" in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
+        self.assertTrue(all("limit" not in text.casefold() for text in bot.WITHDRAWAL_IMAGE_REPLIES))
         self.assertTrue(all(
-            "🔄 Relink your locked order wallet to refresh the locked withdrawal." in text
+            "relink your wallet" in text.casefold()
+            or "restore your wallet connection" in text.casefold()
             for text in bot.WITHDRAWAL_IMAGE_REPLIES
         ))
 

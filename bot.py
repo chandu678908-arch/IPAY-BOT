@@ -1872,13 +1872,16 @@ ORDER_IMAGE_REPLIES = (
 )
 
 WITHDRAWAL_IMAGE_REPLIES = (
-    "◆ iPAY – WITHDRAWAL STATUS\n\n▪️ Check your daily UPI limit.\n▪️ Ensure your UPI and bank are active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for wallet verification and processing.\n\n⏳ Allow time for the status update.\n📞 Contact CS if still locked.\n\n◆ STAY UPDATED!",
-    "◆ iPAY – WITHDRAWAL UPDATE\n\n▪️ Verify your UPI limit and bank status.\n▪️ Make sure your UPI is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for system verification and processing.\n\n⏳ Please wait for the update.\n📞 Contact CS if the order remains locked.\n\n◆ THANK YOU!",
-    "◆ iPAY – WITHDRAWAL SUPPORT\n\n▪️ Check your UPI limit and bank account.\n▪️ Confirm your UPI can receive payments.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Allow time for wallet verification.\n\n⏳ Wait for the latest status.\n📞 Contact CS if the issue continues.\n\n◆ STAY INFORMED!",
-    "◆ iPAY – WITHDRAWAL PROCESS\n\n1️⃣ Check your daily UPI limit.\n2️⃣ Ensure your UPI and bank are active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n4️⃣ Wait for system processing.\n\n⏳ The order may remain locked temporarily.\n📞 Contact CS if unresolved.\n\n◆ FOLLOW THE STEPS!",
-    "◆ iPAY – IMPORTANT NOTICE\n\n▪️ Verify your UPI limit and bank status.\n▪️ Keep your UPI active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for wallet verification and processing.\n\n⏳ Allow time for an update.\n📞 Contact CS if still locked.\n\n◆ KEEP CHECKING!",
-    "◆ iPAY – WITHDRAWAL STATUS UPDATE\n\n▪️ Check your UPI limit and bank account.\n▪️ Ensure your UPI is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Wait for system verification.\n\n⏳ Relinking may not unlock it immediately.\n📞 Contact CS if it remains locked.\n\n◆ THANK YOU FOR YOUR PATIENCE!",
-    "◆ iPAY – WITHDRAWAL VERIFICATION\n\n▪️ Review your UPI limit and bank status.\n▪️ Confirm your UPI account is active.\n🔄 Relink your locked order wallet to refresh the locked withdrawal.\n▪️ Allow time for system processing.\n\n⏳ The withdrawal may remain locked temporarily.\n📞 Contact CS if unresolved.\n\n◆ iPAY SUPPORT – STAY UPDATED!",
+    "◆ iPAY – WITHDRAWAL ORDER LOCKED UPDATE\n\n⚠️ Possible causes:\n▪️ Wallet logout during withdrawal transactions.\n▪️ Connection interruptions during processing.\n\n🔄 Relink your wallet and verify your UPI and bank account.\n\n⏳ Allow up to 24 hours for processing.\n📞 Still locked? Contact Support with Order ID and UID.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – LOCKED WITHDRAWAL ORDER GUIDANCE\n\n⚠️ Your withdrawal order may be affected by:\n▪️ Unstable wallet connection.\n▪️ Wallet logout during processing.\n\n🔄 SOLUTIONS:\n▪️ Ensure UPI and bank account are active.\n▪️ Relink your wallet.\n\n⏳ Allow 24 hours for verification.\n📞 Contact Support with Order ID and UID if unresolved.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – WITHDRAWAL ORDER STATUS NOTICE\n\n🔒 Withdrawal order locking may occur due to wallet disconnection or logout during transactions.\n\n🔄 Please relink your wallet and ensure your UPI ID and bank account are active.\n\n⏳ Allow up to 24 hours for processing.\n📞 If unresolved, share your Order ID and UID with Support.\n\n◆ CHECK • RELINK • VERIFY!",
+    "◆ iPAY – WITHDRAWAL ORDER LOCK SUPPORT\n\n⚠️ CHECK THESE:\n▪️ Wallet connection stability.\n▪️ Active UPI and bank account.\n▪️ Wallet logout during an active withdrawal.\n\n🔄 Relink your wallet to refresh the connection.\n\n⏳ Allow up to 24 hours for system processing.\n📞 Contact Support with Order ID and UID if still locked.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – IMPORTANT WITHDRAWAL ORDER GUIDANCE\n\n🔒 Withdrawal orders may lock due to interrupted connections or wallet logout.\n\n🔄 ACTION REQUIRED:\n▪️ Relink your wallet.\n▪️ Verify your UPI and bank account.\n\n⏳ Wait up to 24 hours for verification and processing.\n\n📞 Contact Customer Support with your Order ID and UID if the issue continues.\n\n◆ THANK YOU!",
+    "◆ iPAY – LOCKED WITHDRAWAL ORDER UPDATE\n\n⚠️ Possible reasons:\n▪️ Wallet disconnected during processing.\n▪️ Wallet logout during an active withdrawal.\n\n🔄 Restore your wallet connection and verify your linked UPI and bank account.\n\n⏳ Allow 24 hours for processing.\n📞 Still locked? Contact Support with Order ID and UID.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – WITHDRAWAL ORDER VERIFICATION\n\n🔄 Please complete these checks:\n▪️ Relink your wallet.\n▪️ Confirm your UPI and bank account are active.\n\n⚠️ Wallet logout or an unstable connection during withdrawal transactions may cause locking.\n\n⏳ Allow up to 24 hours for processing.\n📞 Contact Support with Order ID and UID if unresolved.\n\n◆ CHECK • RELINK • VERIFY!",
+    "◆ iPAY – WITHDRAWAL ORDER LOCK NOTICE\n\n⚠️ Check whether:\n▪️ Your wallet was logged out during a withdrawal transaction.\n▪️ Your wallet connection was interrupted.\n\n🔄 Relink your wallet and verify your bank and UPI details.\n\n⏳ Allow up to 24 hours for system verification.\n📞 If still locked, contact Support with Order ID and UID.\n\n◆ STAY UPDATED!",
+    "◆ iPAY – WITHDRAWAL ORDER PROCESSING GUIDE\n\n🔒 A locked withdrawal order may involve wallet disconnection or transaction-time logout.\n\n▪️ Ensure your bank account and UPI are active.\n▪️ Relink your wallet to refresh the connection.\n\n⏳ Allow up to 24 hours for processing.\n\n📞 For further help, share your Order ID and UID with Support.\n\n◆ THANK YOU FOR YOUR COOPERATION!",
+    "◆ iPAY – WITHDRAWAL ORDER LOCKED ASSISTANCE\n\n⚠️ IMPORTANT CHECKS:\n▪️ Active wallet connection.\n▪️ No logout during withdrawal transactions.\n\n🔄 Relink your wallet and verify your UPI and bank account.\n\n⏳ Allow up to 24 hours for verification and processing.\n📞 If the withdrawal order remains locked, contact Support with Order ID and UID.\n\n◆ CHECK • RELINK • STAY UPDATED!",
 )
 
 WITHDRAWAL_PENDING_IMAGE_REPLIES = (
@@ -1952,15 +1955,82 @@ def _select_category_reply(
     return selected
 
 
+def _is_order_payment_task_layout(text: str) -> bool:
+    """Recognize the specific task-payment order layout from multiple labels."""
+    normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    if re.search(r"\bwithdraw(?:al)?\b", normalized):
+        return False
+
+    has_task_and_order = bool(
+        re.search(r"\btask\s+id\b", normalized)
+        and re.search(r"\border\s+id\b", normalized)
+    )
+    if not has_task_and_order:
+        return False
+
+    field_groups = (
+        bool(
+            re.search(r"\bpayer\s+vpa\b", normalized)
+            and re.search(r"\bpayer\s+card\s+id\b", normalized)
+        ),
+        bool(
+            re.search(r"\bpayee\s+account\b", normalized)
+            and re.search(r"\bpayee\s+name\b", normalized)
+            and re.search(r"\bpayee\s+ifsc\b", normalized)
+        ),
+        bool(
+            re.search(r"\bpay\s+via\s+bank\b", normalized)
+            and re.search(r"\bamount\b", normalized)
+        ),
+        bool(
+            re.search(r"\bgo\s+to\s+transfer\b", normalized)
+            and re.search(r"\bpaid\b", normalized)
+        ),
+    )
+    # Require the task/order identifiers and at least three independent
+    # payment-layout groups. A lone button or ID cannot classify a screenshot.
+    return sum(field_groups) >= 3
+
+
+def _has_explicit_order_lock_status(normalized_text: str) -> bool:
+    """Require an order-specific visible lock status for task-layout screenshots."""
+    return bool(
+        re.search(
+            r"\border\s+(?:status\s+)?(?:locked|locking)\b|"
+            r"\b(?:locked|locking)\s+order\b",
+            normalized_text,
+        )
+    )
+
+
+def _has_withdrawal_lock_status_context(normalized_text: str) -> bool:
+    """Require the locking status to be visibly tied to a withdrawal label."""
+    return bool(
+        re.search(
+            r"\bwithdraw(?:al)?\b(?:\s+\w+){0,4}\s+\b(?:locked|locking)\b|"
+            r"\b(?:locked|locking)\b(?:\s+\w+){0,4}\s+\bwithdraw(?:al)?\b",
+            normalized_text,
+        )
+    )
+
+
 def _classify_locked_screenshot(text: str) -> Optional[str]:
     """Require a transaction-specific locking status and supporting record fields."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    if _is_order_payment_task_layout(text):
+        if (
+            re.search(r"\bwithdraw(?:al)?\b", normalized)
+            or not _has_explicit_order_lock_status(normalized)
+        ):
+            return None
     has_lock_status = bool(re.search(r"\b(?:locked|locking)\b", normalized))
     if not has_lock_status:
         return None
     order_heading = bool(re.search(r"\border\b", normalized))
     withdrawal_heading = bool(re.search(r"\bwithdraw(?:al)?\b", normalized))
     if order_heading and withdrawal_heading:
+        return None
+    if withdrawal_heading and not _has_withdrawal_lock_status_context(normalized):
         return None
     order_record_context = bool(
         re.search(r"\b(?:inr|usdt)\b", normalized)
@@ -1989,6 +2059,10 @@ def _classify_screenshot(text: str) -> Optional[str]:
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
     order_heading = bool(re.search(r"\border\b", normalized))
     withdrawal_heading = bool(re.search(r"\bwithdrawal\b", normalized))
+    if _is_order_payment_task_layout(text) and (
+        withdrawal_heading or not _has_explicit_order_lock_status(normalized)
+    ):
+        return None
     if re.search(r"\b(?:locked|locking)\b", normalized):
         return _classify_locked_screenshot(text)
 
