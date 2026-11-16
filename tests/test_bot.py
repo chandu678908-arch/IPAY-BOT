@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import tempfile
@@ -70,11 +71,113 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(
             bot._classify_locked_screenshot("Withdrawal Locking Locking Locking"),
-            "withdrawal",
+            None,
         )
-        self.assertEqual(bot._classify_locked_screenshot("Order Locking"), "order")
+        self.assertIsNone(bot._classify_locked_screenshot("Order Locking"))
         self.assertIsNone(bot._classify_locked_screenshot("Locking 100 Quota 100"))
         self.assertIsNone(bot._classify_locked_screenshot("Order completed 100"))
+
+    def test_screenshot_classifier_ignores_regular_ipay_dashboard_screens(self):
+        dashboard_cases = (
+            "iPAY Home Account Balance Deposit Withdraw Wallet Transaction History",
+            "Account balance 1500 Deposit Withdraw Wallet Menu Transaction history",
+            "Withdraw option Wallet Balance 200.00 Pending deposit transaction",
+            "Order menu Withdraw Deposit Balance Account History",
+        )
+        for screenshot_text in dashboard_cases:
+            with self.subTest(screenshot_text=screenshot_text):
+                self.assertIsNone(bot._classify_screenshot(screenshot_text))
+                self.assertIsNone(bot._classify_locked_screenshot(screenshot_text))
+
+    def test_gemini_vision_must_agree_with_validated_ocr_candidate(self):
+        image_buffer = BytesIO()
+        Image.new("RGB", (32, 32), "white").save(image_buffer, format="PNG")
+        image_bytes = image_buffer.getvalue()
+        result = {
+            "category": "WITHDRAWAL_LOCKING",
+            "is_ipay_screen": True,
+            "transaction_type": "withdrawal",
+            "visible_status": "Withdrawal Locking",
+            "evidence": ["Withdrawal heading", "Locking status"],
+            "negative_evidence": [],
+            "confidence": 0.96,
+            "reason": "The transaction page visibly shows a locked withdrawal.",
+        }
+        generate_content = AsyncMock(
+            return_value=SimpleNamespace(text=json.dumps(result))
+        )
+        client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content=generate_content)
+            )
+        )
+
+        confirmed = asyncio.run(
+            bot._gemini_confirms_screenshot_category(
+                client,
+                image_bytes,
+                "Withdrawal Locking 100 Quota -100 Balance 27",
+                "withdrawal",
+            )
+        )
+        self.assertTrue(confirmed)
+        call = generate_content.await_args
+        self.assertEqual(call.kwargs["model"], bot.GEMINI_MODEL)
+        self.assertEqual(call.kwargs["config"].response_mime_type, "application/json")
+        self.assertEqual(call.kwargs["contents"][0].inline_data.mime_type, "image/jpeg")
+
+        result["category"] = "OTHER_IPAY_SCREEN"
+        generate_content.return_value = SimpleNamespace(text=json.dumps(result))
+        self.assertFalse(
+            asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
+            )
+        )
+
+        generate_content.return_value = SimpleNamespace(text='{"category":')
+        self.assertFalse(
+            asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
+            )
+        )
+
+        result.update(
+            category="WITHDRAWAL_LOCKING",
+            confidence=0.5,
+        )
+        generate_content.return_value = SimpleNamespace(text=json.dumps(result))
+        self.assertFalse(
+            asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
+            )
+        )
+
+        generate_content.side_effect = TimeoutError("simulated timeout")
+        self.assertFalse(
+            asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
+            )
+        )
 
     def test_screenshot_classifier_detects_only_clear_withdrawal_pending_status(self):
         reference_ocr = (
@@ -119,6 +222,12 @@ class BotTests(unittest.TestCase):
             "order",
         )
         self.assertIsNone(bot._classify_screenshot("Unrelated Pending photo"))
+        self.assertIsNone(
+            bot._classify_screenshot("Withdraw menu Pending Balance Rs 200")
+        )
+        self.assertIsNone(
+            bot._classify_screenshot("Withdrawal page Pending notice only")
+        )
         self.assertIsNone(bot._classify_screenshot(""))
 
     def test_locked_screenshot_templates_keep_category_specific_timing(self):
@@ -888,6 +997,47 @@ class BotTests(unittest.TestCase):
             },
             {update.effective_message.message_id for update in updates},
         )
+
+    def test_screenshot_handler_sends_no_template_when_gemini_disagrees(self):
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={"gemini_client": object()}),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+        )
+        message = SimpleNamespace(
+            message_id=949,
+            photo=[SimpleNamespace(file_id="candidate-image")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=-949, type="supergroup"),
+            effective_user=SimpleNamespace(id=951),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "gemini-disagreement.sqlite3"),
+            patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=b"candidate-image-bytes"),
+            ),
+            patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(
+                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                ),
+            ),
+            patch.object(bot, "_claim_screenshot_image_cooldown", return_value=True),
+            patch.object(
+                bot,
+                "_gemini_confirms_screenshot_category",
+                new=AsyncMock(return_value=False),
+            ) as confirm,
+        ):
+            asyncio.run(bot.group_screenshot_handler(update, context))
+
+        confirm.assert_awaited_once()
+        context.bot.send_message.assert_not_awaited()
 
     def test_private_chat_screenshots_are_processed_and_replied_to(self):
         context = SimpleNamespace(

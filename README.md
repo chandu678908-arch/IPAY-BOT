@@ -16,8 +16,16 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    .\.venv\Scripts\python.exe bot.py
    ```
 
-   Automatic private-chat and group screenshot replies use local OCR. Images
-   are processed locally and are not sent to the conversational AI service. The Docker image
+   Automatic private-chat and group screenshot replies start with local OCR.
+   Ordinary dashboard/menu screenshots do not qualify for a locking response.
+   When local OCR finds a high-evidence locking/pending candidate and a Gemini
+   client is configured, the resized screenshot is sent to Gemini Vision for
+   structured confirmation; a mismatch, invalid response, or API failure results
+   in no locking template. `SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD` defaults to
+   `0.90`; the model's confidence is an estimate, not a calibrated probability.
+   Without a configured Gemini client, strict local OCR remains the fallback.
+   Screenshot bytes and OCR text are not logged or persisted by this classifier.
+   The Docker image
    installs Tesseract at `/usr/bin/tesseract` and runs an actual generated-image
    OCR smoke test during the build; local hosts need Tesseract available on
    `PATH` or configured with `TESSERACT_CMD`.
@@ -41,7 +49,7 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
 - `supabase/schema.sql` is the full SQL Editor setup. `supabase/migrations/` contains additive migrations.
 - `supabase/functions/daily-question-report/` and `supabase/schedule_daily_report.sql` implement hosted report generation and delivery, independent of the Python bot process.
 
-The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot replies use local OCR and are sent only for clearly identified locked Order/Withdrawal screens or Withdrawal Pending status screens. Replies use `reply_to_message_id` and are atomically deduplicated by chat and message ID. Duplicate-image cooldowns use exact SHA-256 bytes per user across chats; resized or recompressed images are treated as different images.
+The classifier uses explicit support/question indicators instead of treating every unknown sentence as an unanswered question. OpenAI classification is optional and runs after the bot reply; local rules remain the fallback. Group collection is limited by Telegram privacy mode and bot membership/permissions. In BotFather, open `/setprivacy`, select this bot, and choose `Disable`; then add the bot to each target group with permission to send messages. This lets Telegram deliver members' image and message updates to the bot. Screenshot replies require transaction-specific OCR evidence; generic dashboard terms such as `Withdraw`, `Wallet`, and `Balance` do not qualify. If Gemini Vision is configured, it must independently confirm the OCR category and confidence threshold before a template is sent. Replies use `reply_to_message_id` and are atomically deduplicated by chat and message ID. Duplicate-image cooldowns use exact SHA-256 bytes per user across chats; resized or recompressed images are treated as different images.
 
 Boost text and media captions use normalized, explicit request patterns and require a single valid six-digit UID before returning the existing randomized acknowledgment. Status questions are directed to the iPAY app or Customer Support; user text alone is never treated as proof that a Boost was applied. Boost message IDs are atomically deduplicated in the bot's local SQLite database for 30 days. `/boost <UID>` remains available with its existing five-minute per-user cooldown.
 
