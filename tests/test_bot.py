@@ -231,10 +231,107 @@ class BotTests(unittest.TestCase):
         self.assertIsNone(bot._classify_screenshot(""))
 
     def test_locked_screenshot_templates_keep_category_specific_timing(self):
-        self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 7)
+        expected_order_replies = (
+            "◆ iPAY – ORDER LOCKED UPDATE\n\n"
+            "⚠️ Possible causes:\n"
+            "▪️ Wallet logout during transactions.\n"
+            "▪️ Connection interruptions.\n"
+            "▪️ Bank daily limit reached.\n\n"
+            "🔄 Relink your wallet and verify your UPI and bank account.\n"
+            "▪️ Check your bank transaction limits.\n\n"
+            "⏳ Allow up to 24 hours for processing.\n"
+            "📞 Still locked? Contact Support with Order ID and UID.\n\n"
+            "◆ STAY UPDATED!",
+            "◆ iPAY – LOCKED ORDER GUIDANCE\n\n"
+            "⚠️ Your order may be affected by:\n"
+            "▪️ Unstable wallet connection.\n"
+            "▪️ Wallet logout during processing.\n"
+            "▪️ Bank receiving limit reached.\n\n"
+            "🔄 SOLUTIONS:\n"
+            "▪️ Check your bank limits.\n"
+            "▪️ Ensure UPI and bank account are active.\n"
+            "▪️ Relink your wallet.\n\n"
+            "⏳ Allow 24 hours for verification.\n"
+            "📞 Contact Support with Order ID and UID if unresolved.",
+            "◆ iPAY – ORDER STATUS NOTICE\n\n"
+            "🔒 Order locking may occur due to wallet disconnection, logout during transactions, or bank limits.\n\n"
+            "🔄 Please relink your wallet and ensure your UPI ID and bank account are active.\n\n"
+            "▪️ Verify your daily bank transaction limits.\n\n"
+            "⏳ Allow up to 24 hours for processing.\n"
+            "📞 If unresolved, share your Order ID and UID with Support.\n\n"
+            "◆ CHECK • RELINK • VERIFY!",
+            "◆ iPAY – ORDER LOCK SUPPORT\n\n"
+            "⚠️ CHECK THESE:\n"
+            "▪️ Wallet connection stability.\n"
+            "▪️ Active UPI and bank account.\n"
+            "▪️ Daily bank transaction limits.\n"
+            "▪️ Wallet logout during an active transaction.\n\n"
+            "🔄 Relink your wallet to refresh the connection.\n\n"
+            "⏳ Allow up to 24 hours for system processing.\n"
+            "📞 Contact Support with Order ID and UID if still locked.",
+            "◆ iPAY – IMPORTANT ORDER GUIDANCE\n\n"
+            "🔒 Orders may lock due to interrupted connections, wallet logout, or exceeded bank limits.\n\n"
+            "🔄 ACTION REQUIRED:\n"
+            "▪️ Relink your wallet.\n"
+            "▪️ Verify your UPI and bank account.\n"
+            "▪️ Check daily receiving limits.\n\n"
+            "⏳ Wait up to 24 hours for verification and processing.\n\n"
+            "📞 Contact Customer Support with your Order ID and UID if the issue continues.",
+            "◆ iPAY – LOCKED ORDER UPDATE\n\n"
+            "⚠️ Possible reasons:\n"
+            "▪️ Bank transaction limit reached.\n"
+            "▪️ Wallet disconnected during processing.\n"
+            "▪️ Wallet logout during an active transaction.\n\n"
+            "🔄 Restore your wallet connection and verify your linked UPI and bank account.\n\n"
+            "▪️ Check your bank limits.\n\n"
+            "⏳ Allow 24 hours for processing.\n"
+            "📞 Still locked? Contact Support with Order ID and UID.",
+            "◆ iPAY – ORDER VERIFICATION\n\n"
+            "🔄 Please complete these checks:\n"
+            "▪️ Relink your wallet.\n"
+            "▪️ Confirm your UPI and bank account are active.\n"
+            "▪️ Check your bank's daily limits.\n\n"
+            "⚠️ Wallet logout or an unstable connection during transactions may cause locking.\n\n"
+            "⏳ Allow up to 24 hours for processing.\n"
+            "📞 Contact Support with Order ID and UID if unresolved.",
+            "◆ iPAY – ORDER LOCK NOTICE\n\n"
+            "⚠️ Check whether:\n"
+            "▪️ Your wallet was logged out during a transaction.\n"
+            "▪️ Your wallet connection was interrupted.\n"
+            "▪️ Your bank limit was reached.\n\n"
+            "🔄 Relink your wallet and verify your bank and UPI details.\n\n"
+            "⏳ Allow up to 24 hours for system verification.\n"
+            "📞 If still locked, contact Support with Order ID and UID.",
+            "◆ iPAY – ORDER PROCESSING GUIDE\n\n"
+            "🔒 A locked order may involve wallet disconnection, transaction-time logout, or bank limit issues.\n\n"
+            "▪️ Ensure your bank account and UPI are active.\n"
+            "▪️ Check your daily transaction limits.\n"
+            "▪️ Relink your wallet to refresh the connection.\n\n"
+            "⏳ Allow up to 24 hours for processing.\n\n"
+            "📞 For further help, share your Order ID and UID with Support.",
+            "◆ iPAY – ORDER LOCKED ASSISTANCE\n\n"
+            "⚠️ IMPORTANT CHECKS:\n"
+            "▪️ Active wallet connection.\n"
+            "▪️ No logout during transactions.\n"
+            "▪️ Bank daily transaction and receiving limits.\n\n"
+            "🔄 Relink your wallet and verify your UPI and bank account.\n\n"
+            "⏳ Allow up to 24 hours for verification and processing.\n"
+            "📞 If the order remains locked, contact Support with Order ID and UID.\n\n"
+            "◆ CHECK • RELINK • STAY UPDATED!",
+        )
+        self.assertEqual(bot.ORDER_IMAGE_REPLIES, expected_order_replies)
+        self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 10)
         self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 7)
-        self.assertEqual(len(set(bot.ORDER_IMAGE_REPLIES)), 7)
+        self.assertEqual(len(set(bot.ORDER_IMAGE_REPLIES)), 10)
         self.assertEqual(len(set(bot.WITHDRAWAL_IMAGE_REPLIES)), 7)
+        self.assertTrue(
+            set(bot.ORDER_IMAGE_REPLIES).isdisjoint(bot.WITHDRAWAL_IMAGE_REPLIES)
+        )
+        self.assertTrue(
+            set(bot.ORDER_IMAGE_REPLIES).isdisjoint(
+                bot.WITHDRAWAL_PENDING_IMAGE_REPLIES
+            )
+        )
         self.assertTrue(all("24 hours" in text for text in bot.ORDER_IMAGE_REPLIES))
         self.assertTrue(all("24 hours" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
         self.assertTrue(all("24" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
@@ -1065,7 +1162,7 @@ class BotTests(unittest.TestCase):
         ), patch.object(
             bot,
             "_read_screenshot_text",
-            new=AsyncMock(return_value="Withdrawal Locking 100 Quota -100 Balance 27"),
+            new=AsyncMock(return_value="Order INR Locking 100 Quota 104 Balance 5"),
         ), patch.object(
             bot.random,
             "choice",
@@ -1075,7 +1172,7 @@ class BotTests(unittest.TestCase):
 
         sent = context.bot.send_message.await_args.kwargs
         self.assertEqual(sent["reply_to_message_id"], message.message_id)
-        self.assertIn(sent["text"], bot.WITHDRAWAL_IMAGE_REPLIES)
+        self.assertIn(sent["text"], bot.ORDER_IMAGE_REPLIES)
 
     def test_conflict_error_handler_stops_polling_cleanly(self):
         application = SimpleNamespace(stop_running=Mock())
