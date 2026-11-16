@@ -1,4 +1,3 @@
-import asyncio
 import sqlite3
 import json
 import unittest
@@ -6,10 +5,8 @@ import uuid
 from contextlib import closing
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from question_intelligence import QuestionStore, classify_message, classify_with_ai, report_csv, report_documents
+from question_intelligence import QuestionStore, classify_message, report_csv, report_documents
 
 
 class QuestionIntelligenceTests(unittest.TestCase):
@@ -95,11 +92,6 @@ class QuestionIntelligenceTests(unittest.TestCase):
         self.assertTrue(self.store.resolve(question_id, 99, "Explained the verified next step."))
         self.assertFalse(self.store.update_status(question_id, "made_up_status"))
         self.assertEqual(self.store.list_questions()[0]["answer_status"], "resolved")
-
-    def test_ai_classifier_failure_falls_back_cleanly(self):
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("offline")))))
-        self.assertIsNone(asyncio.run(classify_with_ai("withdrawal pending?", client)))
-
 
 if __name__ == "__main__":
     unittest.main()

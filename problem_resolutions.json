@@ -39,7 +39,7 @@
   "locked": {
     "title": "Order Locked",
     "keywords": ["locked", "order locked", "account locked", "rebind", "unlock", "frozen"],
-    "resolution": "ORDER LOCKED\n\nWHAT TO DO NEXT\n- Check the wallet status and follow the instructions in the iPay app.\n- Do not log in through third-party apps or make duplicate payments.\n- Ask support what to do before changing or reconnecting the wallet.",
+    "resolution": "◆ iPAY – ORDER LOCKED UPDATE\n\n⚠️ Possible causes:\n▪️ Wallet logout during transactions.\n▪️ Connection interruptions.\n▪️ Bank daily limit reached.\n\n🔄 Relink your wallet and verify your UPI and bank account.\n▪️ Check your bank transaction limits.\n\n⏳ Allow up to 24 hours for processing.\n📞 Still locked? Contact Support with Order ID and UID.\n\n◆ STAY UPDATED!",
     "escalate": true
   },
 

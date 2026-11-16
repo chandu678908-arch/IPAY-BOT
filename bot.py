@@ -26,7 +26,6 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
-from openai import AsyncOpenAI
 from telegram import (
     BotCommand,
     BotCommandScopeAllGroupChats,
@@ -52,10 +51,8 @@ from telegram.request import HTTPXRequest
 from guide import Guide, GuidePage
 from question_intelligence import (
     QuestionStore,
-    classify_with_ai,
     report_documents,
     resolve_timezone,
-    sanitize_for_classification,
 )
 
 load_dotenv()
@@ -68,6 +65,23 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("ipay-bot")
 
 
+def _safe_error_detail(exc: Exception) -> str:
+    parts = [
+        getattr(exc, field, None)
+        for field in ("message", "details", "hint")
+    ]
+    detail = " | ".join(str(part) for part in parts if part) or str(exc)
+    for secret in (
+        TELEGRAM_BOT_TOKEN,
+        GEMINI_API_KEY,
+        SUPABASE_SECRET_KEY,
+        SUPABASE_URL,
+    ):
+        if secret:
+            detail = detail.replace(secret, "[redacted]")
+    return re.sub(r"\s+", " ", detail).strip()[:400]
+
+
 def _asset_path(value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
@@ -76,7 +90,6 @@ def _asset_path(value: str) -> Path:
 
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
 SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD = min(
@@ -208,7 +221,10 @@ _SUPABASE_CLIENT = None
 _SUPABASE_CLIENT_LOCK = threading.Lock()
 _PROCESSED_HI_MESSAGES: Dict[Tuple[int, int], float] = {}
 _PROCESSED_HI_LOCK = threading.Lock()
-SCREENSHOT_IMAGE_COOLDOWN_SECONDS = 300
+SCREENSHOT_IMAGE_COOLDOWN_SECONDS = max(
+    1,
+    int(os.getenv("SCREENSHOT_IMAGE_COOLDOWN_SECONDS", "300")),
+)
 MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
 MAX_SCREENSHOT_PIXELS = 40_000_000
 
@@ -895,22 +911,38 @@ def initialize_supabase_storage() -> None:
         ("daily_reports", "report_date"),
         ("bot_activity_logs", "id"),
         ("handled_screenshot_messages", "chat_id"),
+        ("screenshot_image_cooldowns", "user_id"),
     ):
         try:
             client.table(table).select(column).limit(1).execute()
         except Exception as exc:
             if table == "handled_screenshot_messages":
                 log.warning(
-                    "Persistent screenshot deduplication is unavailable (%s); "
+                    "Persistent screenshot message claims are unavailable "
+                    "(type=%s, code=%s, detail=%s); "
                     "apply the proposed screenshot-claims migration before enabling "
                     "automatic group screenshot replies.",
                     type(exc).__name__,
+                    getattr(exc, "code", "unknown"),
+                    _safe_error_detail(exc),
+                )
+            elif table == "screenshot_image_cooldowns":
+                log.warning(
+                    "Supabase screenshot cooldown table check failed "
+                    "(type=%s, code=%s, detail=%s); apply "
+                    "supabase/migrations/20261114_screenshot_image_cooldowns.sql.",
+                    type(exc).__name__,
+                    getattr(exc, "code", "unknown"),
+                    _safe_error_detail(exc),
                 )
             else:
                 log.warning(
-                    "Analytics table %s is unavailable (%s); run supabase/schema.sql to enable full analytics.",
+                    "Analytics table %s is unavailable (type=%s, code=%s, detail=%s); "
+                    "run supabase/schema.sql to enable full analytics.",
                     table,
                     type(exc).__name__,
+                    getattr(exc, "code", "unknown"),
+                    _safe_error_detail(exc),
                 )
 
 
@@ -1552,28 +1584,17 @@ def _question_metadata(update: Update) -> Dict[str, Any]:
     }
 
 
-def _optional_ai_client(context: ContextTypes.DEFAULT_TYPE) -> Optional[AsyncOpenAI]:
-    application = getattr(context, "application", None)
-    return getattr(application, "bot_data", {}).get("ai_client") if application else None
-
-
 async def _save_question_event(
     update: Update, text: str, response: Optional[str], status: str,
-    ai_client: Optional[AsyncOpenAI] = None,
 ) -> None:
     try:
         store = _question_store()
-        classification = (
-            await classify_with_ai(sanitize_for_classification(text), ai_client)
-            if ai_client is not None else None
-        )
         await asyncio.to_thread(
             store.record,
             **_question_metadata(update),
             original_text=text,
             bot_response=response,
             answer_status=status,
-            classification=classification,
         )
     except Exception as exc:
         log.warning("Question analytics persistence failed (%s)", type(exc).__name__)
@@ -1770,6 +1791,18 @@ def _select_duplicate_image_warning(bot_data: dict) -> str:
     ]
     selected = random.choice(choices or list(DUPLICATE_IMAGE_WARNING_TEMPLATES))
     bot_data["last_duplicate_image_warning"] = selected
+    return selected
+
+
+def _select_category_reply(
+    templates: Tuple[str, ...],
+    bot_data: Dict[str, Any],
+    choice_key: str,
+) -> str:
+    previous = bot_data.get(choice_key)
+    choices = [template for template in templates if template != previous]
+    selected = random.choice(choices or list(templates))
+    bot_data[choice_key] = selected
     return selected
 
 
@@ -2135,6 +2168,49 @@ def _screenshot_image_hash(image_bytes: bytes) -> str:
     return hashlib.sha256(image_bytes).hexdigest()
 
 
+def _duplicate_image_warning(user_id: int, deleted: bool) -> str:
+    deletion_notice = (
+        "🗑️ Your repeated image has been deleted."
+        if deleted
+        else "⚠️ The bot could not delete the repeated image. Please remove it manually."
+    )
+    cooldown = SCREENSHOT_IMAGE_COOLDOWN_SECONDS
+    if cooldown == 300:
+        wait_period = "5 minutes"
+    elif cooldown % 60 == 0:
+        minutes = cooldown // 60
+        wait_period = f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+    else:
+        wait_period = f"{cooldown} second" if cooldown == 1 else f"{cooldown} seconds"
+    return (
+        "⚠️ DUPLICATE IMAGE DETECTED!\n\n"
+        f"🆔 User ID: {user_id}\n\n"
+        f"{deletion_notice}\n\n"
+        f"⏳ Please wait {wait_period} before sending the same image again.\n\n"
+        "◆ THANK YOU FOR YOUR COOPERATION!"
+    )
+
+
+async def _delete_duplicate_screenshot(context, chat_id: int, message_id: int) -> bool:
+    try:
+        await context.bot.delete_message(
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+    except TelegramError as exc:
+        log.warning(
+            "Could not delete duplicate screenshot "
+            "(chat_id=%s, message_id=%s, type=%s, code=%s, detail=%s)",
+            chat_id,
+            message_id,
+            type(exc).__name__,
+            getattr(exc, "code", "unknown"),
+            _safe_error_detail(exc),
+        )
+        return False
+    return True
+
+
 def _claim_screenshot_image_cooldown(
     user_id: int,
     image_hash: str,
@@ -2147,9 +2223,17 @@ def _claim_screenshot_image_cooldown(
 
     if now is None and supabase_enabled():
         try:
+            rpc_parameters = {
+                "p_user_id": user_id,
+                "p_image_hash": image_hash,
+            }
+            if SCREENSHOT_IMAGE_COOLDOWN_SECONDS != 300:
+                rpc_parameters["p_cooldown_seconds"] = (
+                    SCREENSHOT_IMAGE_COOLDOWN_SECONDS
+                )
             response = supabase_client().rpc(
                 "reserve_screenshot_image_cooldown",
-                {"p_user_id": user_id, "p_image_hash": image_hash},
+                rpc_parameters,
             ).execute()
             result = response.data
             if isinstance(result, bool):
@@ -2175,8 +2259,13 @@ def _claim_screenshot_image_cooldown(
             raise RuntimeError("Supabase returned an invalid cooldown result")
         except Exception as exc:
             log.warning(
-                "Supabase image cooldown unavailable; using local SQLite (%s)",
+                "Supabase RPC public.reserve_screenshot_image_cooldown failed "
+                "(type=%s, code=%s, detail=%s); using local SQLite. "
+                "Cooldowns will not be shared across Render instances until this "
+                "RPC succeeds.",
                 type(exc).__name__,
+                getattr(exc, "code", "unknown"),
+                _safe_error_detail(exc),
             )
 
     with closing(db()) as conn:
@@ -2289,19 +2378,16 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
                         "Duplicate screenshot image detected (message_id=%s)",
                         message.message_id,
                     )
-                    bot_data = getattr(
-                        getattr(context, "application", None), "bot_data", {}
+                    deleted = await _delete_duplicate_screenshot(
+                        context,
+                        chat.id,
+                        message.message_id,
                     )
-                    if isinstance(bot_data, dict):
-                        warning = _select_duplicate_image_warning(bot_data)
-                    else:
-                        warning = random.choice(DUPLICATE_IMAGE_WARNING_TEMPLATES)
+                    warning = _duplicate_image_warning(user_id, deleted)
                     try:
-                        await _reply_to_screenshot(
-                            context,
-                            chat.id,
-                            message.message_id,
-                            warning,
+                        await context.bot.send_message(
+                            chat_id=chat.id,
+                            text=warning,
                         )
                     except TelegramError as exc:
                         log.warning(
@@ -2362,10 +2448,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
     user_id = getattr(user, "id", None)
     bot_data = context.application.bot_data
     choice_key = f"screenshot_reply_choice:{chat.id}:{user_id or 'group'}:{category}"
-    previous = bot_data.get(choice_key)
-    choices = [template for template in templates if template != previous]
-    selected = random.choice(choices or list(templates))
-    bot_data[choice_key] = selected
+    selected = _select_category_reply(templates, bot_data, choice_key)
     try:
         await _reply_to_screenshot(context, chat.id, message.message_id, selected)
     except TelegramError as exc:
@@ -3069,7 +3152,6 @@ async def boost_command(
                 update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}",
                 "Boost request rate limited by the five-minute cooldown.",
                 "partially_answered",
-                _optional_ai_client(context),
             )
             return
         if classification is None:
@@ -3166,7 +3248,6 @@ async def boost_command(
     )
     await _save_question_event(
         update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}", notice_text, "partially_answered",
-        _optional_ai_client(context),
     )
 
 
@@ -3312,7 +3393,7 @@ async def faq_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "1. *Delayed Withdrawal:* Check your receiving limit, UPI status, account ability to receive funds, and wallet connection. Ask support to check an unresolved withdrawal.\n"
         "2. *Deposit Not Reflected:* Verify recipient UPI, submit matching UTR number and payment screenshot in iPay.\n"
         "3. *Supported Wallets:* PhonePe, Paytm, MobiKwik, and Freecharge. Pocket UPI is not supported.\n"
-        "4. *Order Locked:* Check wallet status in the app. Avoid multiple attempts. Contact support to review.\n"
+        "4. *Order Locked:* Select the *Order locked* option below for approved wallet and bank limit guidance.\n"
         "5. *Commissions & Rewards:* The guide lists 4% for successfully completed eligible orders. Check current offer conditions; rewards are conditional.\n\n"
         "Choose an option below for detailed guidance:"
     )
@@ -3488,7 +3569,6 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     last_message_at[rate_limit_key] = now
 
     guide: Guide = context.application.bot_data["guide"]
-    ai_client: Optional[AsyncOpenAI] = context.application.bot_data.get("ai_client")
     gemini_client: Optional[genai.Client] = context.application.bot_data.get(
         "gemini_client"
     )
@@ -3503,11 +3583,10 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             question,
             chat_id,
             guide,
-            ai_client,
             enabled_languages=_enabled_languages(),
             gemini_client=gemini_client,
         )
-        if ai_client is not None or gemini_client is not None:
+        if gemini_client is not None:
             add_message(chat_id, "user", question)
             add_message(chat_id, "assistant", answer)
         if pages and pages[0].image_path:
@@ -4442,19 +4521,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "🏦 Contact your bank or wallet provider if UPI is blocked.\n"
             "📞 Contact iPay support if the issue continues.",
         ),
-        "issue:locked": (
-            "order_locked.jpg",
-            "◆ iPAY – ORDER LOCKED\n\n"
-            "🔍 WHAT TO DO NEXT\n\n"
-            "📱 Check your wallet status and follow the iPay app instructions.\n"
-            "🔄 Relink your wallet and wait for the system to process.\n"
-            "🚫 Avoid third-party logins and duplicate payments.\n"
-            "⏳ The system updates every 10 minutes. Keep your wallet ready and wait "
-            "for processing.\n"
-            "📞 Contact iPay support if the issue continues.\n\n"
-            "◆ RELINK • WAIT • STAY UPDATED!",
-        ),
     }
+    if action == "issue:locked":
+        chat = getattr(update, "effective_chat", None) or getattr(
+            getattr(query, "message", None), "chat", None
+        )
+        user = getattr(update, "effective_user", None) or getattr(
+            query, "from_user", None
+        )
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None:
+            log.error("Cannot select Order Locked reply without a chat ID")
+            return
+        user_id = getattr(user, "id", None)
+        bot_data = context.application.bot_data
+        choice_key = (
+            f"screenshot_reply_choice:{chat_id}:{user_id or 'group'}:order"
+        )
+        custom_image_actions[action] = (
+            "order_locked.jpg",
+            _select_category_reply(ORDER_IMAGE_REPLIES, bot_data, choice_key),
+        )
     if action in custom_image_actions:
         filename, explanation = custom_image_actions[action]
         explanation = _style_issue_guidance(explanation)
@@ -4569,7 +4656,6 @@ async def _ai_answer(
     question: str,
     chat_id: int,
     guide: Guide,
-    ai_client: Optional[AsyncOpenAI],
     on_update: Optional[Callable[[str], Awaitable[None]]] = None,
     enabled_languages: Optional[List[str]] = None,
     pre_retrieved_pages: Optional[List[GuidePage]] = None,
@@ -4583,7 +4669,7 @@ async def _ai_answer(
     custom_faqs = _matching_custom_faqs(question)
     if not pages and not custom_faqs:
         record_unanswered_question(question)
-    if ai_client is None and gemini_client is None:
+    if gemini_client is None:
         if custom_faqs:
             return (
                 "\n\n".join(f"{entry['title']}\n{entry['answer']}" for entry in custom_faqs),
@@ -4629,50 +4715,15 @@ async def _ai_answer(
             if answer:
                 return answer, pages
             log.warning("Gemini returned an empty chat response")
+            raise RuntimeError("Gemini returned an empty chat response")
         except (genai_errors.APIError, TimeoutError) as exc:
             log.error(
-                "Gemini chat request failed (%s, HTTP %s)",
+                "Gemini chat request failed (type=%s, HTTP %s, detail=%s)",
                 type(exc).__name__,
                 getattr(exc, "code", "unknown"),
+                _safe_error_detail(exc),
             )
-            if ai_client is None:
-                raise
-            log.warning("Using OpenAI chat fallback after Gemini request failure")
-        if ai_client is None:
-            return (
-                "I couldn't prepare a reliable answer from the guide. "
-                f"Please contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}.",
-                pages,
-            )
-
-    response = await ai_client.chat.completions.create(
-        model=AI_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_content,
-            },
-            *history,
-            {"role": "user", "content": question[:2000]},
-        ],
-        temperature=0.2,
-        max_tokens=AI_MAX_OUTPUT_TOKENS,
-        stream=True,
-    )
-    answer_parts = []
-    async for chunk in response:
-        content = chunk.choices[0].delta.content
-        if content:
-            answer_parts.append(content)
-            if on_update:
-                await on_update("".join(answer_parts))
-    answer = "".join(answer_parts).strip()
-    if not answer:
-        answer = (
-            "I couldn't prepare a reliable answer from the guide. "
-            f"Please contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
-        )
-    return answer, pages
+            raise
 
 
 def _ai_unavailable_answer(question: str, guide: Guide) -> str:
@@ -4836,7 +4887,6 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    ai_client: Optional[AsyncOpenAI] = context.application.bot_data.get("ai_client")
     gemini_client: Optional[genai.Client] = context.application.bot_data.get(
         "gemini_client"
     )
@@ -4861,10 +4911,8 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             question,
             conversation_id,
             guide,
-            ai_client,
-            None,
-            _enabled_languages(),
-            pre_retrieved_pages,
+            enabled_languages=_enabled_languages(),
+            pre_retrieved_pages=pre_retrieved_pages,
             gemini_client=gemini_client,
         )
         if chat_action_task:
@@ -4885,7 +4933,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         answer_status = "answered" if has_approved_source else "partially_answered"
         if any(term in answer.casefold() for term in ("couldn't find", "could not find", "contact support", "not sure")) and not has_approved_source:
             answer_status = "needs_human_review"
-        await _save_question_event(update, question, answer_with_support, answer_status, ai_client)
+        await _save_question_event(update, question, answer_with_support, answer_status)
     except Exception as exc:
         if chat_action_task and not chat_action_task.done():
             chat_action_task.cancel()
@@ -4899,7 +4947,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             fallback,
             reply_markup=support_options_keyboard(),
         )
-        await _save_question_event(update, question, fallback, "needs_human_review", ai_client)
+        await _save_question_event(update, question, fallback, "needs_human_review")
 
 
 async def _post_init(application: Application) -> None:
@@ -4928,6 +4976,45 @@ async def _post_shutdown(application: Application) -> None:
     if gemini_client:
         await gemini_client.aio.aclose()
         gemini_client.close()
+
+
+def _create_gemini_client() -> Optional[genai.Client]:
+    if not GEMINI_API_KEY:
+        log.warning(
+            "Gemini is not configured: GEMINI_API_KEY is unset; Gemini chat and "
+            "Vision are unavailable."
+        )
+        return None
+    if not GEMINI_MODEL:
+        log.error("Gemini client initialization failed: GEMINI_MODEL is empty.")
+        return None
+    try:
+        client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=genai_types.HttpOptions(
+                timeout=int(AI_TIMEOUT_SECONDS * 1000),
+                retry_options=genai_types.HttpRetryOptions(
+                    attempts=2,
+                    initial_delay=0.5,
+                    max_delay=2.0,
+                    http_status_codes=[408, 500, 502, 503, 504],
+                ),
+            ),
+        )
+    except Exception as exc:
+        log.error(
+            "Gemini SDK client initialization failed (model=%s, type=%s, detail=%s)",
+            GEMINI_MODEL,
+            type(exc).__name__,
+            _safe_error_detail(exc),
+        )
+        return None
+    log.info(
+        "Gemini SDK client initialized (model=%s); API access will be verified "
+        "on the first request.",
+        GEMINI_MODEL,
+    )
+    return client
 
 
 def create_guide() -> Guide:
@@ -4998,31 +5085,14 @@ def build_application(
         .build()
     )
     application.bot_data["guide"] = guide or create_guide()
-    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if openai_api_key:
-        application.bot_data["ai_client"] = AsyncOpenAI(
-            api_key=openai_api_key, timeout=AI_TIMEOUT_SECONDS
-        )
-        log.info("OpenAI question classification is configured")
-    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if gemini_api_key:
-        application.bot_data["gemini_client"] = genai.Client(
-            api_key=gemini_api_key,
-            http_options=genai_types.HttpOptions(
-                timeout=int(AI_TIMEOUT_SECONDS * 1000),
-                retry_options=genai_types.HttpRetryOptions(
-                    attempts=2,
-                    initial_delay=0.5,
-                    max_delay=2.0,
-                    http_status_codes=[408, 500, 502, 503, 504],
-                ),
-            ),
-        )
-        log.info("Gemini chat replies are configured (model=%s)", GEMINI_MODEL)
-    elif not openai_api_key:
-        log.info("No hosted AI provider configured; local guide and FAQ replies remain available")
+    gemini_client = _create_gemini_client()
+    if gemini_client is not None:
+        application.bot_data["gemini_client"] = gemini_client
     if not AI_ENABLED:
-        log.info("AI-generated chat replies are disabled by AI_ENABLED")
+        log.info(
+            "Gemini chat replies are disabled by AI_ENABLED; screenshot Vision "
+            "remains available when its client is configured."
+        )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("hi", hi_command))
     application.add_handler(CommandHandler(BOOST_COMMANDS, boost_command))

@@ -105,71 +105,12 @@ def classify_message(text: str) -> Dict[str, Any]:
     }
 
 
-async def classify_with_ai(text: str, client: Any) -> Optional[Dict[str, Any]]:
-    """Optional multilingual classification; failures leave the local classifier in place."""
-    categories = [key for key, _ in _TOPICS] + ["feature_request", "general_support"]
-    prompt = (
-        "Classify this Telegram support message. Return only JSON with keys: eligible (boolean), "
-        "category, subcategory, intent, summary, priority (low|normal|high|critical), "
-        "sentiment (positive|neutral|negative), language (short language code), "
-        "confidence (0..1), is_complaint (boolean), is_feature_request (boolean), needs_human (boolean). "
-        f"Allowed categories: {', '.join(categories)}. Mark greetings, spam, and unrelated chat as not eligible. "
-        "Do not repeat credentials or personal numbers in the summary. Message: " + text[:1500]
-    )
-    try:
-        result = await client.chat.completions.create(
-            model=os.getenv("AI_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0,
-            max_tokens=180,
-            timeout=8.0,
-        )
-        raw = result.choices[0].message.content or "{}"
-        data = json.loads(raw)
-        if not isinstance(data, dict) or not data.get("eligible"):
-            return {"eligible": False}
-        if data.get("category") not in categories:
-            return None
-        priority = data.get("priority")
-        if priority not in {"low", "normal", "high", "critical"}:
-            priority = "normal"
-        sentiment = data.get("sentiment")
-        if sentiment not in {"positive", "neutral", "negative"}:
-            sentiment = "neutral"
-        try:
-            confidence = min(1.0, max(0.0, float(data.get("confidence", 0))))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        return {
-            "eligible": True,
-            "category": data["category"],
-            "subcategory": str(data.get("subcategory", "other"))[:80],
-            "intent": str(data.get("intent", "support_request"))[:80],
-            "summary": _safe_text(str(data.get("summary", data["category"])), 240),
-            "priority": priority,
-            "sentiment": sentiment,
-            "language": str(data.get("language", "unknown"))[:16],
-            "classification_confidence": confidence,
-            "is_complaint": bool(data.get("is_complaint")),
-            "is_feature_request": bool(data.get("is_feature_request")),
-            "needs_human": bool(data.get("needs_human")),
-        }
-    except Exception as exc:
-        log.info("AI question classification unavailable; using local rules (%s)", type(exc).__name__)
-        return None
-
-
 def _safe_text(value: str, limit: int = 2000) -> str:
     value = (value or "").strip()
     if _SENSITIVE.search(value):
         return "[redacted: potentially sensitive content]"
     value = re.sub(r"(?<!\d)\d{6}(?!\d)", "[redacted UID]", value)
     return value[:limit]
-
-
-def sanitize_for_classification(value: str) -> str:
-    return _safe_text(value, 1500)
 
 
 class _ClosingConnection(sqlite3.Connection):

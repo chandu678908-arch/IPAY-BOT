@@ -332,6 +332,10 @@ class BotTests(unittest.TestCase):
                 bot.WITHDRAWAL_PENDING_IMAGE_REPLIES
             )
         )
+        self.assertIn(
+            bot._resolution_for_issue("locked")["resolution"],
+            bot.ORDER_IMAGE_REPLIES,
+        )
         self.assertTrue(all("24 hours" in text for text in bot.ORDER_IMAGE_REPLIES))
         self.assertTrue(all("24 hours" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
         self.assertTrue(all("24" not in text for text in bot.WITHDRAWAL_IMAGE_REPLIES))
@@ -437,7 +441,10 @@ class BotTests(unittest.TestCase):
         async def scenario():
             context = SimpleNamespace(
                 application=SimpleNamespace(bot_data={}),
-                bot=SimpleNamespace(send_message=AsyncMock()),
+                bot=SimpleNamespace(
+                    send_message=AsyncMock(),
+                    delete_message=AsyncMock(),
+                ),
             )
             message = SimpleNamespace(
                 message_id=11,
@@ -616,6 +623,20 @@ class BotTests(unittest.TestCase):
             ignore_duplicates=True,
         )
 
+    def test_supabase_storage_checks_screenshot_cooldown_table(self):
+        response = SimpleNamespace(data=[])
+        client = MagicMock()
+        client.table.return_value.select.return_value.limit.return_value.execute.return_value = (
+            response
+        )
+        with patch.object(bot, "supabase_enabled", return_value=True), patch.object(
+            bot, "supabase_client", return_value=client
+        ):
+            bot.initialize_supabase_storage()
+
+        client.table.assert_any_call("screenshot_image_cooldowns")
+        client.table.return_value.select.assert_any_call("user_id")
+
     def test_screenshot_image_cooldown_is_scoped_and_expires_after_five_minutes(self):
         image_hash = "a" * 64
         different_image_hash = "b" * 64
@@ -642,6 +663,22 @@ class BotTests(unittest.TestCase):
             bot._DB_INITIALIZED_PATHS.discard(schema_key)
             self.assertFalse(
                 bot._claim_screenshot_image_cooldown(100, image_hash, now=1301)
+            )
+
+    def test_screenshot_image_cooldown_supports_configured_duration(self):
+        image_hash = "f" * 64
+        with (
+            patch.object(bot, "DB_PATH", self.root / "configured-cooldown.sqlite3"),
+            patch.object(bot, "SCREENSHOT_IMAGE_COOLDOWN_SECONDS", 60),
+        ):
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1000)
+            )
+            self.assertFalse(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1059.9)
+            )
+            self.assertTrue(
+                bot._claim_screenshot_image_cooldown(100, image_hash, now=1060)
             )
 
     def test_screenshot_image_cooldown_allows_recompressed_images(self):
@@ -695,19 +732,52 @@ class BotTests(unittest.TestCase):
             {"p_user_id": 12, "p_image_hash": "d" * 64},
         )
 
+    def test_configured_screenshot_cooldown_passes_seconds_to_supabase(self):
+        response = SimpleNamespace(data=True)
+        client = MagicMock()
+        client.rpc.return_value.execute.return_value = response
+        with (
+            patch.object(bot, "supabase_enabled", return_value=True),
+            patch.object(bot, "supabase_client", return_value=client),
+            patch.object(bot, "SCREENSHOT_IMAGE_COOLDOWN_SECONDS", 90),
+        ):
+            self.assertTrue(bot._claim_screenshot_image_cooldown(12, "a" * 64))
+        client.rpc.assert_called_with(
+            "reserve_screenshot_image_cooldown",
+            {
+                "p_user_id": 12,
+                "p_image_hash": "a" * 64,
+                "p_cooldown_seconds": 90,
+            },
+        )
+
     def test_screenshot_image_cooldown_falls_back_to_sqlite_on_supabase_error(self):
+        from postgrest.exceptions import APIError
+
         db_path = self.root / "supabase-cooldown-fallback.sqlite3"
         image_hash = "e" * 64
-        with patch.object(bot, "DB_PATH", db_path), patch.object(
-            bot, "supabase_enabled", return_value=True
-        ), patch.object(
-            bot,
-            "supabase_client",
-            side_effect=RuntimeError("database unavailable"),
-        ), self.assertLogs("ipay-bot", level="WARNING") as logs:
+        api_error = APIError(
+            {
+                "message": "Could not find function public.reserve_screenshot_image_cooldown",
+                "code": "PGRST202",
+                "details": "Function missing from the schema cache",
+                "hint": "Apply the screenshot cooldown migration",
+            }
+        )
+        with (
+            patch.object(bot, "DB_PATH", db_path),
+            patch.object(bot, "SUPABASE_SECRET_KEY", "do-not-log-this-secret"),
+            patch.object(bot, "supabase_enabled", return_value=True),
+            patch.object(bot, "supabase_client", side_effect=api_error),
+            self.assertLogs("ipay-bot", level="WARNING") as logs,
+        ):
             self.assertTrue(bot._claim_screenshot_image_cooldown(89, image_hash))
             self.assertFalse(bot._claim_screenshot_image_cooldown(89, image_hash))
-        self.assertIn("using local SQLite", "\n".join(logs.output))
+        log_text = "\n".join(logs.output)
+        self.assertIn("using local SQLite", log_text)
+        self.assertIn("PGRST202", log_text)
+        self.assertIn("reserve_screenshot_image_cooldown", log_text)
+        self.assertNotIn("do-not-log-this-secret", log_text)
 
     def test_screenshot_ocr_failure_is_logged_without_replying_or_logging_image_data(self):
         async def scenario():
@@ -899,7 +969,10 @@ class BotTests(unittest.TestCase):
         async def scenario():
             context = SimpleNamespace(
                 application=SimpleNamespace(bot_data={}),
-                bot=SimpleNamespace(send_message=AsyncMock()),
+                bot=SimpleNamespace(
+                    send_message=AsyncMock(),
+                    delete_message=AsyncMock(),
+                ),
             )
             message = SimpleNamespace(
                 message_id=41,
@@ -911,6 +984,20 @@ class BotTests(unittest.TestCase):
                 effective_chat=SimpleNamespace(id=-100, type="group"),
                 effective_user=SimpleNamespace(id=8),
             )
+            duplicate = SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=42,
+                    photo=[],
+                    document=SimpleNamespace(
+                        file_id="same-image-document", mime_type="image/jpeg"
+                    ),
+                ),
+                effective_chat=SimpleNamespace(id=-100, type="group"),
+                effective_user=SimpleNamespace(id=8),
+            )
+            ocr = AsyncMock(
+                return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+            )
             with patch.object(
                 bot,
                 "_download_screenshot_bytes",
@@ -918,16 +1005,21 @@ class BotTests(unittest.TestCase):
             ), patch.object(
                 bot,
                 "_read_screenshot_text",
-                new=AsyncMock(
-                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
-                ),
+                new=ocr,
             ), patch.object(bot.random, "choice", side_effect=lambda options: options[0]):
                 await bot.group_screenshot_handler(update, context)
+                await bot.group_screenshot_handler(duplicate, context)
 
-            context.bot.send_message.assert_awaited_once()
-            sent = context.bot.send_message.await_args.kwargs
+            ocr.assert_awaited_once()
+            sent = context.bot.send_message.await_args_list[0].kwargs
             self.assertEqual(sent["reply_to_message_id"], 41)
             self.assertIn(sent["text"], bot.WITHDRAWAL_IMAGE_REPLIES)
+            warning = context.bot.send_message.await_args_list[1].kwargs["text"]
+            self.assertIn("🆔 User ID: 8", warning)
+            context.bot.delete_message.assert_awaited_once_with(
+                chat_id=-100,
+                message_id=42,
+            )
 
         with patch.object(bot, "DB_PATH", self.root / "image-documents.sqlite3"):
             asyncio.run(scenario())
@@ -952,7 +1044,10 @@ class BotTests(unittest.TestCase):
             with self.subTest(category=index):
                 context = SimpleNamespace(
                     application=SimpleNamespace(bot_data={}),
-                    bot=SimpleNamespace(send_message=AsyncMock()),
+                    bot=SimpleNamespace(
+                        send_message=AsyncMock(),
+                        delete_message=AsyncMock(),
+                    ),
                 )
 
                 def make_update(message_id, chat_id, as_document=False):
@@ -1016,27 +1111,37 @@ class BotTests(unittest.TestCase):
                 ocr.assert_awaited_once()
                 calls = context.bot.send_message.await_args_list
                 self.assertEqual(len(calls), 2)
-                self.assertEqual(
-                    {
-                        call.kwargs["reply_to_message_id"]
-                        for call in calls
-                    },
-                    {update.effective_message.message_id for update in updates},
-                )
                 texts = [call.kwargs["text"] for call in calls]
+                warnings = [
+                    text for text in texts
+                    if text.startswith("⚠️ DUPLICATE IMAGE DETECTED!")
+                ]
+                self.assertEqual(len(warnings), 1)
                 self.assertEqual(
-                    sum(text in bot.DUPLICATE_IMAGE_WARNING_TEMPLATES for text in texts),
-                    1,
+                    warnings[0],
+                    "⚠️ DUPLICATE IMAGE DETECTED!\n\n"
+                    "🆔 User ID: 501\n\n"
+                    "🗑️ Your repeated image has been deleted.\n\n"
+                    "⏳ Please wait 5 minutes before sending the same image again.\n\n"
+                    "◆ THANK YOU FOR YOUR COOPERATION!",
                 )
                 self.assertEqual(
                     sum(text in category_templates for text in texts),
                     1,
                 )
+                context.bot.delete_message.assert_awaited_once()
+                self.assertIn(
+                    context.bot.delete_message.await_args.kwargs["message_id"],
+                    {update.effective_message.message_id for update in updates},
+                )
 
     def test_five_repeated_image_uploads_run_ocr_only_once(self):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={}),
-            bot=SimpleNamespace(send_message=AsyncMock()),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(),
+                delete_message=AsyncMock(),
+            ),
         )
         updates = [
             SimpleNamespace(
@@ -1082,17 +1187,123 @@ class BotTests(unittest.TestCase):
         self.assertEqual(len(calls), 5)
         self.assertEqual(
             sum(
-                call.kwargs["text"] in bot.DUPLICATE_IMAGE_WARNING_TEMPLATES
+                call.kwargs["text"].startswith("⚠️ DUPLICATE IMAGE DETECTED!")
                 for call in calls
             ),
             4,
         )
+        self.assertEqual(context.bot.delete_message.await_count, 4)
+        deleted_message_ids = {
+            call.kwargs["message_id"]
+            for call in context.bot.delete_message.await_args_list
+        }
+        self.assertEqual(deleted_message_ids, {901, 902, 903, 904})
+        self.assertNotIn(900, deleted_message_ids)
+        for call in calls:
+            if call.kwargs["text"].startswith("⚠️ DUPLICATE IMAGE DETECTED!"):
+                self.assertEqual(call.kwargs["text"].splitlines()[2], "🆔 User ID: 901")
+
+    def test_duplicate_warning_reports_failed_delete_without_false_claim(self):
+        from telegram.error import Forbidden
+
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(),
+                delete_message=AsyncMock(side_effect=Forbidden("not enough rights")),
+            ),
+        )
+
+        def make_update(message_id):
+            return SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=message_id,
+                    photo=[SimpleNamespace(file_id=f"image-{message_id}")],
+                    document=None,
+                ),
+                effective_chat=SimpleNamespace(id=-901, type="supergroup"),
+                effective_user=SimpleNamespace(id=902),
+            )
+
+        async def scenario():
+            with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=b"same-duplicate-image"),
+            ), patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(return_value=""),
+            ):
+                await bot.group_screenshot_handler(make_update(910), context)
+                await bot.group_screenshot_handler(make_update(911), context)
+
+        with patch.object(bot, "DB_PATH", self.root / "failed-delete.sqlite3"):
+            asyncio.run(scenario())
+
+        context.bot.delete_message.assert_awaited_once_with(
+            chat_id=-901,
+            message_id=911,
+        )
+        warning = context.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("🆔 User ID: 902", warning)
+        self.assertIn(
+            "The bot could not delete the repeated image. Please remove it manually.",
+            warning,
+        )
+        self.assertNotIn("Your repeated image has been deleted", warning)
+
+    def test_duplicate_photo_is_deleted_in_private_chat(self):
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(),
+                delete_message=AsyncMock(),
+            ),
+        )
+
+        def make_update(message_id):
+            return SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=message_id,
+                    photo=[SimpleNamespace(file_id=f"private-{message_id}")],
+                    document=None,
+                ),
+                effective_chat=SimpleNamespace(id=903, type="private"),
+                effective_user=SimpleNamespace(id=904),
+            )
+
+        async def scenario():
+            with patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=b"private-same-image"),
+            ), patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(return_value=""),
+            ):
+                await bot.group_screenshot_handler(make_update(920), context)
+                await bot.group_screenshot_handler(make_update(921), context)
+
+        with patch.object(bot, "DB_PATH", self.root / "private-duplicate.sqlite3"):
+            asyncio.run(scenario())
+
+        context.bot.delete_message.assert_awaited_once_with(
+            chat_id=903,
+            message_id=921,
+        )
+        self.assertIn(
+            "🆔 User ID: 904",
+            context.bot.send_message.await_args.kwargs["text"],
+        )
         self.assertEqual(
-            {
-                call.kwargs["reply_to_message_id"]
-                for call in calls
-            },
-            {update.effective_message.message_id for update in updates},
+            context.bot.send_message.await_args.kwargs["text"],
+            "⚠️ DUPLICATE IMAGE DETECTED!\n\n"
+            "🆔 User ID: 904\n\n"
+            "🗑️ Your repeated image has been deleted.\n\n"
+            "⏳ Please wait 5 minutes before sending the same image again.\n\n"
+            "◆ THANK YOU FOR YOUR COOPERATION!",
         )
 
     def test_screenshot_handler_sends_no_template_when_gemini_disagrees(self):
@@ -1671,7 +1882,11 @@ class BotTests(unittest.TestCase):
                     edit_message_media=AsyncMock(),
                     edit_message_reply_markup=AsyncMock(),
                 )
-                update = SimpleNamespace(callback_query=query)
+                update = SimpleNamespace(
+                    callback_query=query,
+                    effective_chat=SimpleNamespace(id=-100),
+                    effective_user=SimpleNamespace(id=7),
+                )
                 asyncio.run(bot.handle_callback(update, context))
                 query.answer.assert_awaited_once()
                 self.assertTrue(
@@ -2479,49 +2694,7 @@ class BotTests(unittest.TestCase):
         message.reply_text.assert_awaited_once()
         self.assertIn("only to configured", message.reply_text.await_args.args[0])
 
-    def test_ai_receives_relevant_guide_excerpt(self):
-        guide = self.make_guide()
-        async def response_stream():
-            yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(content="Check the order details.")
-                    )
-                ]
-            )
-
-        create = AsyncMock(return_value=response_stream())
-        client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(create=create),
-            )
-        )
-        streamed_updates = []
-
-        async def record_update(answer):
-            streamed_updates.append(answer)
-
-        with patch.object(bot, "DB_PATH", self.root / "history.sqlite3"):
-            answer, pages = asyncio.run(
-                bot._ai_answer(
-                    "What should I check before paying?",
-                    42,
-                    guide,
-                    client,
-                    record_update,
-                )
-            )
-        self.assertEqual(answer, "Check the order details.")
-        self.assertEqual(streamed_updates, ["Check the order details."])
-        self.assertTrue(pages)
-        self.assertTrue(create.await_args.kwargs["stream"])
-        self.assertEqual(create.await_args.kwargs["max_tokens"], 300)
-        messages = create.await_args.kwargs["messages"]
-        self.assertIn("recipient", messages[0]["content"])
-        self.assertIn("same language", messages[0]["content"])
-        self.assertIn("untrusted input", messages[0]["content"])
-
-    def test_gemini_streams_chat_response_and_takes_priority(self):
+    def test_gemini_streams_chat_response_with_guide_context(self):
         async def response_stream():
             yield SimpleNamespace(text="Check the linked wallet ")
             yield SimpleNamespace(text="status in the app.")
@@ -2530,12 +2703,6 @@ class BotTests(unittest.TestCase):
         gemini_client = SimpleNamespace(
             aio=SimpleNamespace(
                 models=SimpleNamespace(generate_content_stream=generate)
-            )
-        )
-        openai_create = AsyncMock()
-        openai_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(create=openai_create)
             )
         )
         streamed_updates = []
@@ -2552,7 +2719,6 @@ class BotTests(unittest.TestCase):
                     "How do I check my wallet?",
                     42,
                     self.make_guide(),
-                    openai_client,
                     record_update,
                     gemini_client=gemini_client,
                 )
@@ -2570,22 +2736,15 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             generate.await_args.kwargs["model"], "test-gemini-model"
         )
-        self.assertTrue(generate.await_args.kwargs["config"].system_instruction)
-        self.assertFalse(openai_create.await_count)
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("recipient", instructions)
+        self.assertIn("same language", instructions)
+        self.assertIn("untrusted input", instructions)
 
-    def test_gemini_timeout_falls_back_to_openai_chat(self):
-        async def response_stream():
-            yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(content="Use the account menu.")
-                    )
-                ]
-            )
-
+    def test_gemini_timeout_is_reported_without_provider_fallback(self):
         async def slow_gemini_request(**_kwargs):
             await asyncio.sleep(0.05)
-            return response_stream()
+            return SimpleNamespace(text="Use the account menu.")
 
         generate = AsyncMock(side_effect=slow_gemini_request)
         gemini_client = SimpleNamespace(
@@ -2593,28 +2752,21 @@ class BotTests(unittest.TestCase):
                 models=SimpleNamespace(generate_content_stream=generate)
             )
         )
-        openai_create = AsyncMock(return_value=response_stream())
-        openai_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(create=openai_create)
-            )
-        )
         with (
             patch.object(bot, "DB_PATH", self.root / "gemini-timeout.sqlite3"),
             patch.object(bot, "AI_TIMEOUT_SECONDS", 0.01),
+            self.assertLogs("ipay-bot", level="ERROR") as logs,
         ):
-            answer, _ = asyncio.run(
-                bot._ai_answer(
-                    "Where can I find account settings?",
-                    42,
-                    self.make_guide(),
-                    openai_client,
-                    gemini_client=gemini_client,
+            with self.assertRaises(TimeoutError):
+                asyncio.run(
+                    bot._ai_answer(
+                        "Where can I find account settings?",
+                        42,
+                        self.make_guide(),
+                        gemini_client=gemini_client,
+                    )
                 )
-            )
-
-        self.assertEqual(answer, "Use the account menu.")
-        openai_create.assert_awaited_once()
+        self.assertIn("Gemini chat request failed", "\n".join(logs.output))
 
     def test_build_application_configures_gemini_without_logging_key(self):
         gemini_client = SimpleNamespace(
@@ -2622,11 +2774,7 @@ class BotTests(unittest.TestCase):
             close=Mock(),
         )
         with (
-            patch.dict(
-                os.environ,
-                {"GEMINI_API_KEY": "test-key-not-for-logging", "OPENAI_API_KEY": ""},
-                clear=False,
-            ),
+            patch.object(bot, "GEMINI_API_KEY", "test-key-not-for-logging"),
             patch.object(bot.genai, "Client", return_value=gemini_client) as client_factory,
         ):
             with self.assertLogs("ipay-bot", level="INFO") as log_output:
@@ -2637,6 +2785,7 @@ class BotTests(unittest.TestCase):
 
         self.assertIs(application.bot_data["gemini_client"], gemini_client)
         self.assertNotIn("test-key-not-for-logging", "\n".join(log_output.output))
+        self.assertIn("Gemini SDK client initialized", "\n".join(log_output.output))
         http_options = client_factory.call_args.kwargs["http_options"]
         self.assertEqual(http_options.timeout, int(bot.AI_TIMEOUT_SECONDS * 1000))
         self.assertEqual(http_options.retry_options.attempts, 2)
@@ -2647,6 +2796,50 @@ class BotTests(unittest.TestCase):
         asyncio.run(bot._post_shutdown(application))
         gemini_client.aio.aclose.assert_awaited_once()
         gemini_client.close.assert_called_once()
+
+    def test_build_application_handles_missing_gemini_key(self):
+        with (
+            patch.object(bot, "GEMINI_API_KEY", ""),
+            patch.object(bot.genai, "Client") as client_factory,
+            self.assertLogs("ipay-bot", level="WARNING") as logs,
+        ):
+            application = bot.build_application(
+                "dummy-telegram-token-for-tests",
+                guide=self.make_guide(),
+            )
+
+        self.assertNotIn("gemini_client", application.bot_data)
+        client_factory.assert_not_called()
+        self.assertIn("GEMINI_API_KEY is unset", "\n".join(logs.output))
+
+    def test_build_application_logs_invalid_gemini_configuration(self):
+        with (
+            patch.object(bot, "GEMINI_API_KEY", "test-invalid-gemini-key"),
+            patch.object(
+                bot.genai,
+                "Client",
+                side_effect=ValueError("invalid test configuration"),
+            ),
+            self.assertLogs("ipay-bot", level="ERROR") as logs,
+        ):
+            application = bot.build_application(
+                "dummy-telegram-token-for-tests",
+                guide=self.make_guide(),
+            )
+
+        self.assertNotIn("gemini_client", application.bot_data)
+        log_text = "\n".join(logs.output)
+        self.assertIn("Gemini SDK client initialization failed", log_text)
+        self.assertIn("invalid test configuration", log_text)
+        self.assertNotIn("test-invalid-gemini-key", log_text)
+
+    def test_gemini_sdk_client_constructs_without_network_access(self):
+        with patch.object(bot, "GEMINI_API_KEY", "local-test-key"):
+            client = bot._create_gemini_client()
+
+        self.assertIsNotNone(client)
+        asyncio.run(client.aio.aclose())
+        client.close()
 
     def test_ai_reply_does_not_send_image_captions_to_ai(self):
         message = SimpleNamespace(
@@ -2663,7 +2856,7 @@ class BotTests(unittest.TestCase):
         )
         context = SimpleNamespace(
             application=SimpleNamespace(
-                bot_data={"guide": self.make_guide(), "ai_client": object()}
+                bot_data={"guide": self.make_guide()}
             )
         )
         with patch.object(bot, "_ai_answer", new=AsyncMock()) as ai_answer:
@@ -2744,7 +2937,10 @@ class BotTests(unittest.TestCase):
         context = SimpleNamespace(
             args=["My", "withdrawal", "is", "pending"],
             application=SimpleNamespace(
-                bot_data={"guide": self.make_guide(), "ai_client": object()}
+                bot_data={
+                    "guide": self.make_guide(),
+                    "gemini_client": object(),
+                }
             ),
         )
         with (
@@ -2826,7 +3022,6 @@ class BotTests(unittest.TestCase):
             application=SimpleNamespace(
                 bot_data={
                     "guide": self.make_guide(),
-                    "ai_client": object(),
                     "last_message_at": {},
                 }
             )
@@ -2882,7 +3077,6 @@ class BotTests(unittest.TestCase):
             application=SimpleNamespace(
                 bot_data={
                     "guide": self.make_guide(),
-                    "ai_client": object(),
                     "last_message_at": {},
                 }
             ),
@@ -2921,7 +3115,6 @@ class BotTests(unittest.TestCase):
             application=SimpleNamespace(
                 bot_data={
                     "guide": self.make_guide(),
-                    "ai_client": object(),
                     "last_message_at": {},
                 }
             ),
@@ -3024,7 +3217,6 @@ class BotTests(unittest.TestCase):
                     application=SimpleNamespace(
                         bot_data={
                             "guide": self.make_guide(),
-                            "ai_client": object(),
                             "last_message_at": {},
                         }
                     )
@@ -3416,28 +3608,34 @@ class BotTests(unittest.TestCase):
             answer=AsyncMock(),
             delete_message=AsyncMock(),
         )
+        expected_reply = bot.ORDER_IMAGE_REPLIES[3]
+        previous_key = "screenshot_reply_choice:-100:7:order"
+        bot_data = {
+            "guide": self.make_guide(),
+            previous_key: bot.ORDER_IMAGE_REPLIES[0],
+        }
         context = SimpleNamespace(
-            application=SimpleNamespace(bot_data={"guide": self.make_guide()})
+            application=SimpleNamespace(bot_data=bot_data)
         )
-        with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images):
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_chat=SimpleNamespace(id=-100),
+            effective_user=SimpleNamespace(id=7),
+        )
+        with patch.object(bot, "CUSTOM_IMAGES_DIR", custom_images), patch.object(
+            bot.random,
+            "choice",
+            return_value=expected_reply,
+        ) as choose:
             asyncio.run(
-                bot.handle_callback(SimpleNamespace(callback_query=query), context)
+                bot.handle_callback(update, context)
             )
         message.reply_photo.assert_awaited_once()
         query.delete_message.assert_awaited_once()
         caption = message.reply_photo.await_args.kwargs["caption"]
-        self.assertEqual(
-            caption,
-            "◆ iPAY – ORDER LOCKED\n\n"
-            "🔍 WHAT TO DO NEXT\n\n"
-            "📱 Check your wallet status and follow the iPay app instructions.\n"
-            "🔄 Relink your wallet and wait for the system to process.\n"
-            "🚫 Avoid third-party logins and duplicate payments.\n"
-            "⏳ The system updates every 10 minutes. Keep your wallet ready and wait "
-            "for processing.\n"
-            "📞 Contact iPay support if the issue continues.\n\n"
-            "◆ RELINK • WAIT • STAY UPDATED!",
-        )
+        self.assertEqual(caption, expected_reply)
+        self.assertNotIn(bot.ORDER_IMAGE_REPLIES[0], choose.call_args.args[0])
+        self.assertEqual(bot_data[previous_key], expected_reply)
 
     def test_commission_issue_uses_image_with_structured_guidance(self):
         custom_images = self.root / "custom_images"
