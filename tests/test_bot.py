@@ -203,6 +203,71 @@ class BotTests(unittest.TestCase):
         self.assertNotIn(selected, bot.WITHDRAWAL_IMAGE_REPLIES)
         self.assertEqual(list(choose.call_args.args[0]), list(bot.ORDER_IMAGE_REPLIES))
 
+    def test_transition_information_lock_layouts_separate_order_and_withdrawal(self):
+        order_transition = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Expire Time 23:08:41 Pay via bank name mobikwik "
+            "Payer VPA 9508737769@mbkns Payer Card ID 942159_1794763668251 "
+            "Payee Account ****2697 Payee Name nithin Payee IFSC ****0151 "
+            "Amount 330.00 Locking OK Paid"
+        )
+        withdrawal_transition = (
+            "Transition Information Task ID pi_722316179 Order ID 6AFAEE210002 "
+            "UTR Expire Time 17:35:57 Bank Name mobikwik "
+            "Payee VPA 9680337179@mbk Payee Card ID 722316_1791104329116 "
+            "Payer Name RobertChaturvedi Payer Account Order Amt 5000.00 "
+            "Actual Amt 4999.99 Received -5000.00 INR Locking OK"
+        )
+        self.assertEqual(bot._classify_screenshot(order_transition), "order")
+        self.assertEqual(
+            bot._classify_locked_screenshot(order_transition), "order"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(withdrawal_transition), "withdrawal"
+        )
+        self.assertEqual(
+            bot._classify_locked_screenshot(withdrawal_transition), "withdrawal"
+        )
+
+        # The low-resolution withdrawal layout has recurring OCR confusions:
+        # 1D/ID, Gok Nome/Bank Name, Onder Arr/Order Amt, and Recetved/Received.
+        withdrawal_transition_ocr = (
+            "Transition Information Task 1D pi_722316179 Order ID 6AFAEE210002 "
+            "Gok Nome Peyee VPA 9680337179@mbk Payee Card ID 722316_1791104329116 "
+            "Payer Accourt Onder Arr 5000.00 Acmel Ari 4999.99 Recetved "
+            "-5000.00 INR Locking"
+        )
+        self.assertEqual(
+            bot._classify_screenshot(withdrawal_transition_ocr), "withdrawal"
+        )
+
+        # The red stamp/status is required; an empty UTR or amount cannot classify.
+        self.assertIsNone(
+            bot._classify_screenshot(order_transition.replace(" Locking", ""))
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                withdrawal_transition.replace(" Locking", "")
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Transition Information Task ID 1 Order ID 2 UTR "
+                "Amount 330.00 Locking"
+            )
+        )
+
+        self.assertEqual(len(bot.ORDER_IMAGE_REPLIES), 10)
+        self.assertEqual(len(bot.WITHDRAWAL_IMAGE_REPLIES), 10)
+        self.assertEqual(len(bot.WITHDRAWAL_PENDING_IMAGE_REPLIES), 10)
+        for category, templates, ocr in (
+            ("order", bot.ORDER_IMAGE_REPLIES, order_transition),
+            ("withdrawal", bot.WITHDRAWAL_IMAGE_REPLIES, withdrawal_transition),
+        ):
+            selected = bot._select_category_reply(templates, {}, f"transition:{category}")
+            self.assertIn(selected, templates)
+            self.assertEqual(bot._classify_screenshot(ocr), category)
+
     def test_gemini_vision_must_agree_with_validated_ocr_candidate(self):
         image_buffer = BytesIO()
         Image.new("RGB", (32, 32), "white").save(image_buffer, format="PNG")

@@ -1955,6 +1955,85 @@ def _select_category_reply(
     return selected
 
 
+def _is_transition_information_layout(normalized_text: str) -> bool:
+    return bool(re.search(r"\btransition\s+information\b", normalized_text))
+
+
+def _normalize_transition_information_ocr(normalized_text: str) -> str:
+    """Correct common Tesseract confusions in the narrow transition layout."""
+    corrections = (
+        (r"\btask\s+(?:1d|10)\b", "task id"),
+        (r"\border\s+(?:1d|10)\b", "order id"),
+        (r"\b(?:gok|bonk|bak)\s+nome\b", "bank name"),
+        (r"\b(?:peyee|poyee)\b", "payee"),
+        (r"\bpoyer\b", "payer"),
+        (r"\b(?:onder|order)\s+(?:arr|art|arma)\b", "order amt"),
+        (r"\b(?:acme|acmel)\s+ari\b", "actual amt"),
+        (r"\b(?:acme|acmel)\s+art\b", "actual amt"),
+        (r"\brecetved\b", "received"),
+        (r"\brroerved\b", "received"),
+    )
+    for pattern, replacement in corrections:
+        normalized_text = re.sub(pattern, replacement, normalized_text)
+    return normalized_text
+
+
+def _is_transition_information_order_lock(normalized_text: str) -> bool:
+    """Recognize the order-side Transition Information locking layout."""
+    if not _is_transition_information_layout(normalized_text):
+        return False
+    if re.search(r"\bwithdraw(?:al)?\b", normalized_text):
+        return False
+    identifiers = (
+        re.search(r"\btask\s+id\b", normalized_text),
+        re.search(r"\border\s+id\b", normalized_text),
+    )
+    payment_fields = (
+        re.search(r"\bpayer\s+vpa\b", normalized_text),
+        re.search(r"\bpayer\s+card\s+id\b", normalized_text),
+        re.search(r"\bpayee\s+account\b", normalized_text),
+        re.search(r"\bpayee\s+name\b", normalized_text),
+        re.search(r"\bpayee\s+ifsc\b", normalized_text),
+        re.search(r"\bamount\b", normalized_text),
+    )
+    return all(identifiers) and all(payment_fields) and bool(
+        re.search(r"\b(?:locked|locking)\b", normalized_text)
+    )
+
+
+def _is_transition_information_withdrawal_lock(normalized_text: str) -> bool:
+    """Recognize the withdrawal-side Transition Information locking layout."""
+    if not _is_transition_information_layout(normalized_text):
+        return False
+    identifiers = (
+        re.search(r"\btask\s+id\b", normalized_text),
+        re.search(r"\border\s+id\b", normalized_text),
+    )
+    withdrawal_fields = (
+        re.search(r"\bbank\s+name\b", normalized_text),
+        re.search(r"\bpayee\s+vpa\b", normalized_text),
+        re.search(r"\b(?:payer|payee)\s+card\s+id\b", normalized_text),
+        re.search(r"\border\s+amt\b", normalized_text),
+        re.search(r"\bactual\s+amt\b", normalized_text),
+        re.search(r"\breceived\b", normalized_text),
+    )
+    return all(identifiers) and all(withdrawal_fields) and bool(
+        re.search(r"\b(?:locked|locking)\b", normalized_text)
+    )
+
+
+def _classify_transition_information_lock(text: str) -> Optional[str]:
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold())
+    if not _is_transition_information_layout(normalized):
+        return None
+    normalized = _normalize_transition_information_ocr(normalized)
+    if _is_transition_information_withdrawal_lock(normalized):
+        return "withdrawal"
+    if _is_transition_information_order_lock(normalized):
+        return "order"
+    return None
+
+
 def _is_order_payment_task_layout(text: str) -> bool:
     """Recognize the specific task-payment order layout from multiple labels."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
@@ -2017,6 +2096,8 @@ def _has_withdrawal_lock_status_context(normalized_text: str) -> bool:
 def _classify_locked_screenshot(text: str) -> Optional[str]:
     """Require a transaction-specific locking status and supporting record fields."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    if _is_transition_information_layout(normalized):
+        return _classify_transition_information_lock(text)
     if _is_order_payment_task_layout(text):
         if (
             re.search(r"\bwithdraw(?:al)?\b", normalized)
@@ -2057,6 +2138,8 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
 def _classify_screenshot(text: str) -> Optional[str]:
     """Classify only transaction-specific locking and pending status evidence."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+    if _is_transition_information_layout(normalized):
+        return _classify_transition_information_lock(text)
     order_heading = bool(re.search(r"\border\b", normalized))
     withdrawal_heading = bool(re.search(r"\bwithdrawal\b", normalized))
     if _is_order_payment_task_layout(text) and (
@@ -2418,7 +2501,54 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
     with Image.open(io.BytesIO(image_bytes)) as image:
         try:
             prepared = _preprocess_screenshot_for_ocr(image)
-            return pytesseract.image_to_string(prepared, lang="eng")
+            text = pytesseract.image_to_string(prepared, lang="eng")
+            normalized = re.sub(r"[^a-z]+", " ", text.casefold())
+            if re.search(r"\btransition\s+information\b", normalized):
+                from PIL import ImageOps
+
+                # Transition screens are often shared at narrow resolutions.
+                # A larger single-block pass recovers their small field labels
+                # and angled LOCKING stamp; other screenshots keep one OCR pass.
+                detailed = ImageOps.grayscale(image.convert("RGB"))
+                detail_scale = min(
+                    4.0,
+                    1200 / max(1, detailed.width),
+                    6000 / max(1, detailed.height),
+                )
+                detailed = detailed.resize(
+                    (
+                        max(1, int(detailed.width * detail_scale)),
+                        max(1, int(detailed.height * detail_scale)),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+                detail_text = pytesseract.image_to_string(
+                    detailed,
+                    lang="eng",
+                    config="--psm 6",
+                )
+                stamp = image.crop(
+                    (
+                        int(image.width * 0.55),
+                        int(image.height * 0.52),
+                        int(image.width * 0.99),
+                        int(image.height * 0.75),
+                    )
+                ).convert("RGB")
+                stamp = stamp.resize(
+                    (stamp.width * 4, stamp.height * 4),
+                    Image.Resampling.LANCZOS,
+                )
+                stamp_text = pytesseract.image_to_string(
+                    stamp,
+                    lang="eng",
+                    config="--psm 6",
+                )
+                if stamp_text.strip():
+                    detail_text = f"{detail_text}\n{stamp_text}"
+                if detail_text.strip():
+                    text = f"{text}\n{detail_text}"
+            return text
         except Exception as exc:
             raise RuntimeError(
                 "Tesseract OCR could not run. Verify the executable and English "
