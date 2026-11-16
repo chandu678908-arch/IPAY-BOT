@@ -70,6 +70,14 @@ class BotTests(unittest.TestCase):
             "withdrawal",
         )
         self.assertEqual(
+            bot._classify_locked_screenshot("Withdrawal 100.00 Locking"),
+            "withdrawal",
+        )
+        self.assertEqual(
+            bot._classify_locked_screenshot("Order Locking 100.00"),
+            "order",
+        )
+        self.assertEqual(
             bot._classify_locked_screenshot("Withdrawal Locking Locking Locking"),
             None,
         )
@@ -406,9 +414,93 @@ class BotTests(unittest.TestCase):
         with patch.dict("sys.modules", {
             "PIL": SimpleNamespace(Image=SimpleNamespace(open=Mock(return_value=fake_image))),
             "pytesseract": fake_pytesseract,
-        }), patch.dict("os.environ", {"TESSERACT_CMD": "/usr/bin/tesseract"}):
+        }), patch.dict("os.environ", {"TESSERACT_CMD": "/usr/bin/tesseract"}), patch.object(
+            bot, "_resolve_tesseract_command", return_value="/usr/bin/tesseract"
+        ), patch.object(bot, "_preprocess_screenshot_for_ocr", return_value=fake_image):
             self.assertEqual(bot._tesseract_ocr_bytes(b"image"), "Order Locking 100 Quota 104")
         self.assertEqual(fake_pytesseract.pytesseract.tesseract_cmd, "/usr/bin/tesseract")
+        fake_pytesseract.image_to_string.assert_called_once_with(fake_image, lang="eng")
+
+    def test_tesseract_auto_detection_finds_install_under_program_files(self):
+        install_root = self.root / "Programs"
+        executable = install_root / "Tesseract-OCR" / "tesseract.exe"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"test executable placeholder")
+        with patch.dict("os.environ", {
+            "TESSERACT_CMD": "",
+            "ProgramFiles": str(install_root),
+            "ProgramFiles(x86)": "",
+            "LOCALAPPDATA": "",
+        }, clear=False), patch.object(bot.shutil, "which", return_value=None):
+            resolved = bot._resolve_tesseract_command()
+        self.assertEqual(resolved, str(executable.resolve()))
+
+    def test_tesseract_ocr_reports_clear_error_when_not_installed(self):
+        with patch.object(bot, "_resolve_tesseract_command", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Install Tesseract"):
+                bot._tesseract_ocr_bytes(b"image")
+
+    def test_tesseract_diagnostic_reports_version_languages_and_readiness(self):
+        fake_pytesseract = SimpleNamespace(
+            pytesseract=SimpleNamespace(tesseract_cmd=""),
+            get_tesseract_version=Mock(return_value="5.4.1\n"),
+            get_languages=Mock(return_value=["osd", "eng"]),
+        )
+        with patch.object(bot, "_resolve_tesseract_command", return_value="fake-tesseract"), \
+                patch.object(bot.os.path, "isfile", return_value=True), \
+                patch.object(bot.os, "access", return_value=True), \
+                patch.dict("sys.modules", {"pytesseract": fake_pytesseract}):
+            status = bot.diagnose_tesseract()
+        self.assertEqual(status["version"], "5.4.1")
+        self.assertEqual(status["languages"], ["eng", "osd"])
+        self.assertTrue(status["available"])
+        self.assertTrue(status["ready"])
+        self.assertEqual(fake_pytesseract.pytesseract.tesseract_cmd, "fake-tesseract")
+
+    def test_issue_spike_alert_sends_only_aggregate_details_once(self):
+        user = SimpleNamespace(id=801, username="private-user", first_name="Private")
+        message = SimpleNamespace(
+            message_id=902,
+            date=datetime.now(timezone.utc),
+            from_user=user,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=-1001, type="supergroup"),
+            effective_user=user,
+        )
+        telegram_bot = SimpleNamespace(send_message=AsyncMock())
+
+        with (
+            patch.object(bot, "DB_PATH", self.root / "issue-spikes.sqlite3"),
+            patch.object(bot, "ISSUE_SPIKE_CHAT_ID", "-100900"),
+            patch.object(bot, "ISSUE_SPIKE_THRESHOLD", 1),
+        ):
+            asyncio.run(bot._track_issue_spike(update, "ORDER_LOCKED", telegram_bot))
+            asyncio.run(bot._track_issue_spike(update, "ORDER_LOCKED", telegram_bot))
+
+        telegram_bot.send_message.assert_awaited_once()
+        sent_text = telegram_bot.send_message.await_args.kwargs["text"]
+        self.assertIn("ORDER_LOCKED", sent_text)
+        self.assertIn("Reports: 1", sent_text)
+        self.assertNotIn("801", sent_text)
+        self.assertNotIn("private-user", sent_text)
+
+    def test_ocr_preprocessing_upscales_small_dark_screenshots_without_cropping(self):
+        from PIL import Image
+
+        source = Image.new("RGB", (600, 300), (10, 10, 10))
+        processed = bot._preprocess_screenshot_for_ocr(source)
+        self.assertEqual(processed.mode, "L")
+        self.assertEqual(processed.size, (1200, 600))
+        self.assertGreater(processed.getpixel((0, 0)), 240)
+
+    def test_ocr_preprocessing_caps_large_screenshots_and_preserves_aspect(self):
+        from PIL import Image
+
+        source = Image.new("RGB", (5000, 2500), "white")
+        processed = bot._preprocess_screenshot_for_ocr(source)
+        self.assertEqual(processed.size, (3600, 1800))
 
     def test_locked_screenshot_classifier_accepts_layout_variations(self):
         order_variations = (
@@ -4443,6 +4535,52 @@ class BotTests(unittest.TestCase):
             upd = Update(update_id=3001, message=msg)
             # CommandHandler must NOT match ordinary text without leading /
             self.assertFalse(handler.check_update(upd))
+
+    def test_async_conversation_turn_uses_worker_and_preserves_write_order(self):
+        import threading
+
+        main_thread = threading.get_ident()
+        writes = []
+
+        def record(chat_id, role, content):
+            writes.append((chat_id, role, content, threading.get_ident()))
+
+        with patch.object(bot, "add_message", side_effect=record):
+            asyncio.run(bot._async_add_conversation_turn(77, "question", "answer"))
+
+        self.assertEqual([(row[1], row[2]) for row in writes], [
+            ("user", "question"),
+            ("assistant", "answer"),
+        ])
+        self.assertTrue(all(row[3] != main_thread for row in writes))
+        self.assertEqual(len({row[3] for row in writes}), 1)
+
+    def test_async_setting_access_runs_sync_database_function_in_worker(self):
+        import threading
+
+        main_thread = threading.get_ident()
+        observed = []
+
+        def read_setting(key, default=None):
+            observed.append((key, default, threading.get_ident()))
+            return "on"
+
+        with patch.object(bot, "get_setting", side_effect=read_setting):
+            result = asyncio.run(bot._async_get_setting("ai_enabled", "off"))
+
+        self.assertEqual(result, "on")
+        self.assertEqual(observed[0][:2], ("ai_enabled", "off"))
+        self.assertNotEqual(observed[0][2], main_thread)
+
+    def test_typing_heartbeat_sends_progress_and_stops_cleanly(self):
+        async def scenario():
+            telegram_bot = SimpleNamespace(send_chat_action=AsyncMock())
+            task = asyncio.create_task(bot._typing_heartbeat(telegram_bot, 55))
+            await asyncio.sleep(0)
+            await bot._stop_background_task(task)
+            return telegram_bot.send_chat_action.await_count
+
+        self.assertEqual(asyncio.run(scenario()), 1)
 
 
 if __name__ == "__main__":

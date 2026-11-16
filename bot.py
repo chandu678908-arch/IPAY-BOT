@@ -49,6 +49,7 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from guide import Guide, GuidePage
+from issue_spikes import IssueSpikeMonitor, classify_spike_category
 from question_intelligence import (
     QuestionStore,
     report_documents,
@@ -193,6 +194,12 @@ BOOST_UID_PROMPT = (
     "six-digit iPAY UID (example: /boost 123456)."
 )
 REPORT_TIMEZONE = os.getenv("REPORT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
+ISSUE_SPIKE_CHAT_ID = os.getenv("ISSUE_SPIKE_CHAT_ID", "").strip()
+ISSUE_SPIKE_THRESHOLD = max(1, int(os.getenv("ISSUE_SPIKE_THRESHOLD", "10")))
+ISSUE_SPIKE_WINDOW_MINUTES = max(1, int(os.getenv("ISSUE_SPIKE_WINDOW_MINUTES", "15")))
+ISSUE_SPIKE_ALERT_COOLDOWN_SECONDS = max(
+    1, int(os.getenv("ISSUE_SPIKE_ALERT_COOLDOWN_SECONDS", "900"))
+)
 BOOST_COMMANDS = ("boost", "bost", "boos", "boostt", "bot")
 BOOST_MESSAGE_RETENTION_SECONDS = 30 * 24 * 60 * 60
 BOOST_REQUEST = "BOOST_REQUEST"
@@ -912,6 +919,7 @@ def initialize_supabase_storage() -> None:
         ("bot_activity_logs", "id"),
         ("handled_screenshot_messages", "chat_id"),
         ("screenshot_image_cooldowns", "user_id"),
+        ("issue_spike_reports", "category"),
     ):
         try:
             client.table(table).select(column).limit(1).execute()
@@ -931,6 +939,15 @@ def initialize_supabase_storage() -> None:
                     "Supabase screenshot cooldown table check failed "
                     "(type=%s, code=%s, detail=%s); apply "
                     "supabase/migrations/20261114_screenshot_image_cooldowns.sql.",
+                    type(exc).__name__,
+                    getattr(exc, "code", "unknown"),
+                    _safe_error_detail(exc),
+                )
+            elif table == "issue_spike_reports":
+                log.warning(
+                    "Supabase issue spike storage is unavailable "
+                    "(type=%s, code=%s, detail=%s); apply "
+                    "supabase/migrations/20261116_issue_spike_alerts.sql.",
                     type(exc).__name__,
                     getattr(exc, "code", "unknown"),
                     _safe_error_detail(exc),
@@ -980,6 +997,15 @@ def reserve_boost_request(user_id: int, now: int, cooldown_seconds: int) -> int:
     return 0
 
 
+async def _async_reserve_boost_request(
+    user_id: int, now: int, cooldown_seconds: int
+) -> int:
+    """Reserve a boost request without blocking other Telegram updates."""
+    return await asyncio.to_thread(
+        reserve_boost_request, user_id, now, cooldown_seconds
+    )
+
+
 def record_boost_request(
     user_id: int,
     username: Optional[str],
@@ -1023,6 +1049,11 @@ def record_boost_request(
         conn.commit()
 
 
+async def _async_record_boost_request(**values: Any) -> None:
+    """Persist boost audit data off the event loop."""
+    await asyncio.to_thread(record_boost_request, **values)
+
+
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     if supabase_enabled():
         rows = (
@@ -1041,6 +1072,13 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     return row[0] if row else default
 
 
+async def _async_get_setting(
+    key: str, default: Optional[str] = None
+) -> Optional[str]:
+    """Read a setting without blocking the Telegram event loop."""
+    return await asyncio.to_thread(get_setting, key, default)
+
+
 def set_setting(key: str, value: str) -> None:
     if supabase_enabled():
         supabase_client().table("settings").upsert(
@@ -1055,6 +1093,11 @@ def set_setting(key: str, value: str) -> None:
             (key, value, int(time.time())),
         )
         conn.commit()
+
+
+async def _async_set_setting(key: str, value: str) -> None:
+    """Write a setting without blocking the Telegram event loop."""
+    await asyncio.to_thread(set_setting, key, value)
 
 
 def save_custom_faq(key: str, title: str, keywords: List[str], answer: str) -> None:
@@ -1379,6 +1422,37 @@ def get_history(chat_id: int) -> List[Dict[str, str]]:
     return [{"role": role, "content": content} for role, content in rows]
 
 
+async def _async_add_conversation_turn(
+    chat_id: int, question: str, answer: str
+) -> None:
+    """Persist a turn in order, using one bounded worker-pool operation."""
+    def write_turn() -> None:
+        add_message(chat_id, "user", question)
+        add_message(chat_id, "assistant", answer)
+
+    await asyncio.to_thread(write_turn)
+
+
+async def _typing_heartbeat(bot, chat_id: int) -> None:
+    """Keep Telegram's short-lived typing indicator alive during slow replies."""
+    while True:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception as exc:
+            log.debug("Typing indicator failed (%s)", type(exc).__name__)
+        await asyncio.sleep(4)
+
+
+async def _stop_background_task(task: Optional[asyncio.Task]) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def _contains_sensitive_input(text: str) -> bool:
     return bool(
         SENSITIVE_INPUT.search(text)
@@ -1585,19 +1659,91 @@ def _question_metadata(update: Update) -> Dict[str, Any]:
 
 
 async def _save_question_event(
-    update: Update, text: str, response: Optional[str], status: str,
+    update: Update,
+    text: str,
+    response: Optional[str],
+    status: str,
+    telegram_bot=None,
 ) -> None:
     try:
-        store = _question_store()
         await asyncio.to_thread(
-            store.record,
-            **_question_metadata(update),
-            original_text=text,
-            bot_response=response,
-            answer_status=status,
+            _record_question_event_sync,
+            update,
+            text,
+            response,
+            status,
         )
     except Exception as exc:
         log.warning("Question analytics persistence failed (%s)", type(exc).__name__)
+    spike_category = classify_spike_category(text)
+    if spike_category:
+        await _track_issue_spike(update, spike_category, telegram_bot)
+
+
+def _record_question_event_sync(
+    update: Update, text: str, response: Optional[str], status: str
+) -> None:
+    store = _question_store()
+    store.record(
+        **_question_metadata(update),
+        original_text=text,
+        bot_response=response,
+        answer_status=status,
+    )
+
+
+async def _track_issue_spike(update: Update, category: str, telegram_bot=None) -> None:
+    """Check the configured spike window and send metadata-only admin alerts."""
+    if not ISSUE_SPIKE_CHAT_ID:
+        return
+    metadata = _question_metadata(update)
+    if not metadata["message_id"]:
+        return
+
+    def record_and_check():
+        store = IssueSpikeMonitor(
+            DB_PATH,
+            supabase_client() if supabase_enabled() else None,
+        )
+        event_time = datetime.fromtimestamp(metadata["created_at"], timezone.utc)
+        return store.record_and_check(
+            category=category,
+            chat_id=metadata["chat_id"],
+            message_id=metadata["message_id"],
+            user_id=metadata["user_id"],
+            threshold=ISSUE_SPIKE_THRESHOLD,
+            window_minutes=ISSUE_SPIKE_WINDOW_MINUTES,
+            cooldown_seconds=ISSUE_SPIKE_ALERT_COOLDOWN_SECONDS,
+            now=event_time,
+        )
+
+    try:
+        alert = await asyncio.to_thread(record_and_check)
+    except Exception as exc:
+        log.warning(
+            "Issue spike tracking failed (category=%s, type=%s, code=%s)",
+            category,
+            type(exc).__name__,
+            getattr(exc, "code", "unknown"),
+        )
+        return
+    if not alert or telegram_bot is None:
+        return
+    text = (
+        "iPAY issue spike detected\n"
+        f"Category: {alert['category']}\n"
+        f"Reports: {alert['report_count']} in the last {alert['window_minutes']} minutes\n"
+        f"Distinct users: {alert['unique_users']}"
+    )
+    try:
+        await telegram_bot.send_message(chat_id=ISSUE_SPIKE_CHAT_ID, text=text)
+    except Exception as exc:
+        log.warning(
+            "Issue spike alert delivery failed (category=%s, type=%s, code=%s)",
+            category,
+            type(exc).__name__,
+            getattr(exc, "code", "unknown"),
+        )
 
 
 async def activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1819,7 +1965,14 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
     has_record_fields = bool(
         re.search(r"\b(?:quota|balance|amount|transaction|upi|bank)\b", normalized)
     )
-    if not has_record_fields:
+    has_locking_amount = bool(
+        re.search(
+            r"\b(?:locked|locking)\b(?:\W+\w+){0,4}\W+\d+[,.]\d{2}\b|"
+            r"\b\d+[,.]\d{2}\b(?:\W+\w+){0,4}\W+\b(?:locked|locking)\b",
+            text.casefold(),
+        )
+    )
+    if not (has_record_fields or has_locking_amount):
         return None
     return "order" if order_heading else "withdrawal"
 
@@ -2129,14 +2282,91 @@ async def _read_screenshot_text(
     return text
 
 
+def _resolve_tesseract_command(configured: Optional[str] = None) -> Optional[str]:
+    """Resolve an explicit Tesseract command, PATH install, or detected Windows install."""
+    configured = (configured if configured is not None else os.getenv("TESSERACT_CMD", "")).strip()
+    if configured:
+        resolved = shutil.which(configured)
+        if resolved:
+            return resolved
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_file():
+            return str(configured_path.resolve())
+
+    for executable in ("tesseract", "tesseract.exe"):
+        resolved = shutil.which(executable)
+        if resolved:
+            return resolved
+
+    if os.name == "nt":
+        install_roots = (
+            os.getenv("ProgramFiles"),
+            os.getenv("ProgramFiles(x86)"),
+            os.getenv("LOCALAPPDATA"),
+        )
+        relative_paths = (
+            Path("Tesseract-OCR") / "tesseract.exe",
+            Path("Programs") / "Tesseract-OCR" / "tesseract.exe",
+            Path("Apps") / "Tesseract-OCR" / "tesseract.exe",
+        )
+        for root in install_roots:
+            if not root:
+                continue
+            for relative_path in relative_paths:
+                candidate = Path(root) / relative_path
+                if candidate.is_file():
+                    return str(candidate.resolve())
+    return None
+
+
 def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
     from PIL import Image
     import pytesseract
-    configured_command = os.getenv("TESSERACT_CMD", "").strip()
-    if configured_command:
-        pytesseract.pytesseract.tesseract_cmd = configured_command
+
+    command = _resolve_tesseract_command()
+    if not command:
+        raise RuntimeError(
+            "Tesseract OCR is unavailable. Install Tesseract and add its folder "
+            "to PATH, or set TESSERACT_CMD to the executable path."
+        )
+    pytesseract.pytesseract.tesseract_cmd = command
     with Image.open(io.BytesIO(image_bytes)) as image:
-        return pytesseract.image_to_string(image)
+        try:
+            prepared = _preprocess_screenshot_for_ocr(image)
+            return pytesseract.image_to_string(prepared, lang="eng")
+        except Exception as exc:
+            raise RuntimeError(
+                "Tesseract OCR could not run. Verify the executable and English "
+                "language data with `tesseract --version` and `tesseract --list-langs`."
+            ) from exc
+
+
+def _preprocess_screenshot_for_ocr(image):
+    """Improve small or dark UI text while retaining the full screenshot context."""
+    from PIL import Image, ImageEnhance, ImageOps
+
+    working = image.copy()
+    if working.mode not in {"RGB", "L"}:
+        working = working.convert("RGB")
+    grayscale = ImageOps.grayscale(working)
+    scale = min(
+        2.0,
+        1200 / max(1, grayscale.width) if grayscale.width < 1200 else 1.0,
+        3600 / max(1, grayscale.width),
+        6000 / max(1, grayscale.height),
+    )
+    if scale != 1.0:
+        grayscale = grayscale.resize(
+            (max(1, int(grayscale.width * scale)), max(1, int(grayscale.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    histogram = grayscale.histogram()
+    pixel_count = max(1, sum(histogram))
+    mean_brightness = sum(index * count for index, count in enumerate(histogram)) / pixel_count
+    if mean_brightness < 105:
+        grayscale = ImageOps.invert(grayscale)
+    grayscale = ImageOps.autocontrast(grayscale, cutoff=1)
+    return ImageEnhance.Sharpness(grayscale).enhance(1.25)
 
 
 def _claim_screenshot_reply(chat_id: int, message_id: int) -> bool:
@@ -2438,6 +2668,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         message.message_id,
         category,
     )
+    spike_category = {
+        "order": "ORDER_LOCKED",
+        "withdrawal": "WITHDRAWAL_LOCKED",
+        "withdrawal_pending": "WITHDRAWAL_PENDING",
+    }[category]
+    await _track_issue_spike(update, spike_category, getattr(context, "bot", None))
     templates_by_category = {
         "order": ORDER_IMAGE_REPLIES,
         "withdrawal": WITHDRAWAL_IMAGE_REPLIES,
@@ -2716,6 +2952,10 @@ def _enabled_languages() -> List[str]:
     return [language for language in SUPPORTED_LANGUAGES if language.casefold() in enabled]
 
 
+async def _async_enabled_languages() -> List[str]:
+    return await asyncio.to_thread(_enabled_languages)
+
+
 async def ai_control_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin controls for global AI and a group's automatic response behavior."""
     message = update.effective_message
@@ -2729,13 +2969,13 @@ async def ai_control_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     group_chat = chat and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
     setting_key = f"ai_group:{chat.id}" if group_chat else "ai_enabled"
     label = "automatic replies in this group" if group_chat else "AI replies globally"
-    current = get_setting(setting_key, "on") != "off"
+    current = await _async_get_setting(setting_key, "on") != "off"
     if args:
         if len(args) != 1 or args[0] not in {"on", "off"}:
             await message.reply_text("Usage: /ai on or /ai off")
             return
         current = args[0] == "on"
-        set_setting(setting_key, "on" if current else "off")
+        await _async_set_setting(setting_key, "on" if current else "off")
     await message.reply_text(
         f"iPay {label} are {'enabled' if current else 'disabled'}."
     )
@@ -2752,7 +2992,7 @@ async def language_control_command(
         await message.reply_text("This command is available only to configured bot administrators.")
         return
     args = getattr(context, "args", None) or []
-    enabled = _enabled_languages()
+    enabled = await _async_enabled_languages()
     valid_names = {language.casefold() for language in SUPPORTED_LANGUAGES}
     if len(args) != 2 or args[0].casefold() not in valid_names or args[1].casefold() not in {"on", "off"}:
         status = ", ".join(
@@ -2768,7 +3008,7 @@ async def language_control_command(
         enabled.append(language)
     elif args[1].casefold() == "off":
         enabled = [item for item in enabled if item != language]
-    set_setting("enabled_languages", ",".join(enabled))
+    await _async_set_setting("enabled_languages", ",".join(enabled))
     await message.reply_text(
         f"{language} replies are {'enabled' if language in enabled else 'disabled'}."
     )
@@ -3033,7 +3273,9 @@ async def _handle_boost_message(
     if not message:
         return True
     chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
-    if not _claim_boost_message(chat_id, getattr(message, "message_id", None)):
+    if not await asyncio.to_thread(
+        _claim_boost_message, chat_id, getattr(message, "message_id", None)
+    ):
         return True
 
     if classification.category == BOOST_INVALID_UID:
@@ -3110,7 +3352,9 @@ async def boost_command(
     if classification is None:
         chat = getattr(update, "effective_chat", None)
         chat_id = getattr(chat, "id", None) if chat else getattr(message, "chat_id", None)
-        if not _claim_boost_message(chat_id, getattr(message, "message_id", None)):
+        if not await asyncio.to_thread(
+            _claim_boost_message, chat_id, getattr(message, "message_id", None)
+        ):
             return
 
     args = getattr(context, "args", []) or []
@@ -3125,11 +3369,11 @@ async def boost_command(
         remaining = (
             0
             if classification
-            else reserve_boost_request(
+            else await _async_reserve_boost_request(
                 user.id, request_time, BOOST_COOLDOWN_SECONDS
             )
         )
-        record_boost_request(
+        await _async_record_boost_request(
             user_id=user.id,
             username=user.username,
             first_name=user.first_name,
@@ -3152,6 +3396,7 @@ async def boost_command(
                 update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}",
                 "Boost request rate limited by the five-minute cooldown.",
                 "partially_answered",
+                telegram_bot=getattr(context, "bot", None),
             )
             return
         if classification is None:
@@ -3248,6 +3493,7 @@ async def boost_command(
     )
     await _save_question_event(
         update, getattr(message, "text", None) or getattr(message, "caption", None) or f"/boost {uid}", notice_text, "partially_answered",
+        telegram_bot=getattr(context, "bot", None),
     )
 
 
@@ -3372,17 +3618,19 @@ async def faq_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 )
                 return
             keywords = [word.strip()[:80] for word in fields[2].split(",") if word.strip()]
-            save_custom_faq(fields[0], fields[1], keywords[:20], fields[3])
+            await asyncio.to_thread(
+                save_custom_faq, fields[0], fields[1], keywords[:20], fields[3]
+            )
             await message.reply_text(f"Saved administrator-approved FAQ: {fields[0]}.")
             return
         if action == "remove":
             if len(args) != 2:
                 await message.reply_text("Usage: /faq remove <key>")
                 return
-            removed = remove_custom_faq(args[1].casefold())
+            removed = await asyncio.to_thread(remove_custom_faq, args[1].casefold())
             await message.reply_text("FAQ removed." if removed else "FAQ key not found.")
             return
-        entries = list_custom_faqs()
+        entries = await asyncio.to_thread(list_custom_faqs)
         await message.reply_text(
             "Administrator FAQs: "
             + (", ".join(f"{item['key']} - {item['title']}" for item in entries) or "none")
@@ -3546,10 +3794,10 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     chat = getattr(update, "effective_chat", None)
-    if not AI_ENABLED or get_setting("ai_enabled", "on") == "off" or (
+    if not AI_ENABLED or await _async_get_setting("ai_enabled", "on") == "off" or (
         chat
         and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
-        and get_setting(f"ai_group:{chat.id}", "on") == "off"
+        and await _async_get_setting(f"ai_group:{chat.id}", "on") == "off"
     ):
         await message.reply_text("AI answers are disabled by the bot administrator.")
         return
@@ -3579,16 +3827,22 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     else:
         chat_id = chat.id if chat else 0
     try:
+        telegram_bot = getattr(context, "bot", None)
+        typing_task = (
+            asyncio.create_task(_typing_heartbeat(telegram_bot, chat.id))
+            if telegram_bot and chat and hasattr(telegram_bot, "send_chat_action")
+            else None
+        )
         answer, pages = await _ai_answer(
             question,
             chat_id,
             guide,
-            enabled_languages=_enabled_languages(),
+            enabled_languages=await _async_enabled_languages(),
             gemini_client=gemini_client,
         )
+        await _stop_background_task(typing_task)
         if gemini_client is not None:
-            add_message(chat_id, "user", question)
-            add_message(chat_id, "assistant", answer)
+            await _async_add_conversation_turn(chat_id, question, answer)
         if pages and pages[0].image_path:
             await _send_guide_page(message, pages[0])
         await message.reply_text(
@@ -3597,6 +3851,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=notice_keyboard(),
         )
     except Exception as exc:
+        await _stop_background_task(locals().get("typing_task"))
         log.error("/ask failed (%s)", type(exc).__name__)
         await message.reply_text(
             f"Need assistance with {question}- Contact our configured support contacts: {SUPPORT_1} or {SUPPORT_2}.",
@@ -4666,9 +4921,9 @@ async def _ai_answer(
         if pre_retrieved_pages is not None
         else guide.retrieve(question, top_k=2)
     )
-    custom_faqs = _matching_custom_faqs(question)
+    custom_faqs = await asyncio.to_thread(_matching_custom_faqs, question)
     if not pages and not custom_faqs:
-        record_unanswered_question(question)
+        await asyncio.to_thread(record_unanswered_question, question)
     if gemini_client is None:
         if custom_faqs:
             return (
@@ -4702,7 +4957,8 @@ async def _ai_answer(
             "If the detected user language is disabled, answer briefly in English "
             "and say that language is currently unavailable."
         )
-    history = get_history(chat_id)[-6:]
+    history = await asyncio.to_thread(get_history, chat_id)
+    history = history[-6:]
     if gemini_client is not None:
         try:
             answer = await _gemini_answer(
@@ -4820,9 +5076,9 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not pre_retrieved_pages:
             return
 
-    if not AI_ENABLED or get_setting("ai_enabled", "on") == "off":
+    if not AI_ENABLED or await _async_get_setting("ai_enabled", "on") == "off":
         return
-    if is_group and get_setting(f"ai_group:{chat.id}", "on") == "off":
+    if is_group and await _async_get_setting(f"ai_group:{chat.id}", "on") == "off":
         return
 
     message_key = (chat.id, getattr(message, "message_id", None))
@@ -4900,28 +5156,24 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else chat.id
     )
     try:
-        chat_action_task = None
-
-        bot = getattr(context, "bot", None)
-        if bot and hasattr(bot, "send_chat_action"):
-            chat_action_task = asyncio.create_task(
-                bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
-            )
-        answer, pages = await _ai_answer(
-            question,
-            conversation_id,
-            guide,
-            enabled_languages=_enabled_languages(),
-            pre_retrieved_pages=pre_retrieved_pages,
-            gemini_client=gemini_client,
+        telegram_bot = getattr(context, "bot", None)
+        typing_task = (
+            asyncio.create_task(_typing_heartbeat(telegram_bot, chat.id))
+            if telegram_bot and hasattr(telegram_bot, "send_chat_action")
+            else None
         )
-        if chat_action_task:
-            try:
-                await chat_action_task
-            except Exception as exc:
-                log.debug("Typing indicator failed (%s)", type(exc).__name__)
-        add_message(conversation_id, "user", question)
-        add_message(conversation_id, "assistant", answer)
+        try:
+            answer, pages = await _ai_answer(
+                question,
+                conversation_id,
+                guide,
+                enabled_languages=await _async_enabled_languages(),
+                pre_retrieved_pages=pre_retrieved_pages,
+                gemini_client=gemini_client,
+            )
+        finally:
+            await _stop_background_task(typing_task)
+        await _async_add_conversation_turn(conversation_id, question, answer)
         answer_with_support = (
             answer
             + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
@@ -4929,15 +5181,21 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if pages and pages[0].image_path:
             await _send_guide_page(message, pages[0])
         await message.reply_text(answer_with_support)
-        has_approved_source = bool(pages or _matching_custom_faqs(question))
+        has_approved_source = bool(
+            pages or await asyncio.to_thread(_matching_custom_faqs, question)
+        )
         answer_status = "answered" if has_approved_source else "partially_answered"
         if any(term in answer.casefold() for term in ("couldn't find", "could not find", "contact support", "not sure")) and not has_approved_source:
             answer_status = "needs_human_review"
-        await _save_question_event(update, question, answer_with_support, answer_status)
+        await _save_question_event(
+            update,
+            question,
+            answer_with_support,
+            answer_status,
+            telegram_bot=getattr(context, "bot", None),
+        )
     except Exception as exc:
-        if chat_action_task and not chat_action_task.done():
-            chat_action_task.cancel()
-            await asyncio.gather(chat_action_task, return_exceptions=True)
+        await _stop_background_task(locals().get("typing_task"))
         log.error("AI reply failed (%s)", type(exc).__name__)
         fallback = (
             _ai_unavailable_answer(question, guide)
@@ -4947,7 +5205,13 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             fallback,
             reply_markup=support_options_keyboard(),
         )
-        await _save_question_event(update, question, fallback, "needs_human_review")
+        await _save_question_event(
+            update,
+            question,
+            fallback,
+            "needs_human_review",
+            telegram_bot=getattr(context, "bot", None),
+        )
 
 
 async def _post_init(application: Application) -> None:
@@ -5148,25 +5412,51 @@ def start_keep_alive_server(port: Optional[int] = None) -> None:
         log.warning("Could not start keep-alive HTTP server on port %s: %s", target_port, exc)
 
 
-def diagnose_tesseract() -> None:
-    configured = os.getenv("TESSERACT_CMD", "").strip()
-    command = shutil.which(configured) if configured else shutil.which("tesseract")
+def diagnose_tesseract() -> Dict[str, Any]:
+    command = _resolve_tesseract_command()
+    diagnostics: Dict[str, Any] = {
+        "available": False,
+        "command": command,
+        "version": None,
+        "languages": [],
+        "ready": False,
+    }
     if not command or not os.path.isfile(command) or not os.access(command, os.X_OK):
         log.warning(
-            "Tesseract OCR is unavailable or not executable (configured command: %s); "
+            "Tesseract OCR is unavailable or not executable (TESSERACT_CMD or PATH); "
             "group screenshot classification will be skipped.",
-            configured or "tesseract",
         )
-        return
+        return diagnostics
 
     try:
         import pytesseract
 
         pytesseract.pytesseract.tesseract_cmd = command
         version = str(pytesseract.get_tesseract_version()).splitlines()[0]
-        log.info("Tesseract OCR ready at %s (version %s)", command, version)
+        languages = sorted(pytesseract.get_languages(config=""))
+        diagnostics.update(
+            available=True,
+            version=version,
+            languages=languages,
+            ready="eng" in languages,
+        )
+        if diagnostics["ready"]:
+            log.info(
+                "Tesseract OCR ready at %s (version %s; languages=%s)",
+                command,
+                version,
+                ",".join(languages),
+            )
+        else:
+            log.warning(
+                "Tesseract is installed (version %s) but English language data "
+                "is missing; languages=%s",
+                version,
+                ",".join(languages) or "none",
+            )
     except Exception as exc:
         log.warning("Tesseract OCR startup check failed (%s)", type(exc).__name__)
+    return diagnostics
 
 
 def main() -> None:

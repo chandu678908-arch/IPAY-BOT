@@ -26,10 +26,9 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    Without a configured Gemini client, strict local OCR remains the fallback.
    Screenshot bytes and OCR text are not logged or persisted by this classifier.
    The per-user exact-image cooldown defaults to 300 seconds and can be set with
-   `SCREENSHOT_IMAGE_COOLDOWN_SECONDS`. The default uses the existing Supabase
-   function; non-default values also require the additive
-   [`supabase/migrations/20261116_screenshot_image_cooldown_config.sql`](supabase/migrations/20261116_screenshot_image_cooldown_config.sql)
-   overload to be applied in Supabase.
+   `SCREENSHOT_IMAGE_COOLDOWN_SECONDS`. Non-default values require the
+   three-argument Supabase RPC overload provided by the cooldown configuration
+   or recovery migration.
    The Docker image
    installs Tesseract at `/usr/bin/tesseract` and runs an actual generated-image
    OCR smoke test during the build; local hosts need Tesseract available on
@@ -38,13 +37,114 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    For an existing Supabase project, review and approve both
    [`supabase/migrations/20261114_screenshot_reply_claims.sql`](supabase/migrations/20261114_screenshot_reply_claims.sql)
    and [`supabase/migrations/20261114_screenshot_image_cooldowns.sql`](supabase/migrations/20261114_screenshot_image_cooldowns.sql)
-   before running them. The first provides persistent per-message processing
+   before running them. The recommended recovery migration is documented in
+   [Supabase cooldown migration and verification](#supabase-cooldown-migration-and-verification).
+   The first provides persistent per-message processing
    claims; the second atomically tracks exact-image SHA-256 cooldowns per
    Telegram user for five minutes. Until the cooldown migration is applied,
    the bot logs the Supabase RPC failure and falls back to local SQLite, which
    does not provide cross-instance persistence.
 
-4. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
+5. Keep `.env` and all service keys out of Git. Use the server-only Supabase secret/service-role key; never use a publishable key for private server data.
+
+## Windows OCR setup
+
+Python packages do not install the Tesseract executable. Upstream Tesseract
+documentation says newer Windows installers are third-party builds and links
+to the UB Mannheim build. Start at the [upstream download guidance](https://github.com/tesseract-ocr/tessdoc/blob/main/Downloads.md), then use its
+[UB Mannheim installer page](https://digi.bib.uni-mannheim.de/tesseract/).
+Choose the current 64-bit installer and include English (`eng`) language data.
+Do not reinstall Python.
+
+During installation, note the actual folder containing `tesseract.exe`. Add
+that folder (not the executable filename) to Windows `Path` through **Edit the
+system environment variables → Environment Variables → Path**, then reopen
+PowerShell and the IDE. Alternatively set `TESSERACT_CMD` in `.env` to the
+full executable path, for example:
+
+```text
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+```
+
+The bot resolves an explicit `TESSERACT_CMD`, a PATH command, then common
+Windows install roots. It reports the detected version and language data at
+startup; OCR is ready only when `eng` is available. Verify the installation:
+
+```powershell
+where.exe tesseract
+tesseract --version
+tesseract --list-langs
+python --version
+python -m pip show pytesseract
+python -m pip show Pillow
+python -m unittest discover -s tests -v
+```
+
+This project currently targets Python 3.12 in Docker. The inspected local
+system and project virtual environment both report Python 3.14.6; use a Python
+3.12 environment for parity with the deployment image. Installing Tesseract
+does not require changing or reinstalling Python.
+
+## Supabase cooldown migration and verification
+
+For an existing project, first apply the reviewed
+[`20261114_screenshot_reply_claims.sql`](supabase/migrations/20261114_screenshot_reply_claims.sql),
+then apply the additive
+[`20261116_screenshot_cooldown_rpc_recovery.sql`](supabase/migrations/20261116_screenshot_cooldown_rpc_recovery.sql)
+in the Supabase SQL Editor. The recovery migration defines both RPC signatures
+used by the bot (the two-argument five-minute default and the three-argument
+configurable cooldown) and asks PostgREST to reload its schema cache. Do not
+apply production SQL until you have reviewed and approved it. The older
+cooldown migrations remain available for existing installations.
+
+To inspect registered function signatures in SQL Editor:
+
+```sql
+select p.proname, pg_get_function_identity_arguments(p.oid) as arguments,
+       pg_get_function_result(p.oid) as result
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname = 'reserve_screenshot_image_cooldown'
+order by arguments;
+```
+
+Expect signatures `(p_user_id bigint, p_image_hash text)` and
+`(p_user_id bigint, p_image_hash text, p_cooldown_seconds integer)`, each
+returning `boolean`. This checks PostgreSQL registration, not the PostgREST API
+or service-role grants. After applying SQL, restart the bot with the server-only
+Supabase credentials, send the same image twice as the same test user, and
+confirm the logs no longer report `PGRST202` and the second image follows the
+duplicate path. Do not paste credentials into logs or chat.
+
+## Render Docker deployment
+
+This repository has a `Dockerfile` but no `render.yaml` or `Procfile`. In the
+Render Dashboard, create or update a **Docker** web service for the repository
+and branch you use. The image starts with `python bot.py`; it installs Linux
+Tesseract and runs the OCR integration tests during image build. Set service
+environment values from [`render.env.example`](render.env.example) in the
+Dashboard, including `TELEGRAM_BOT_TOKEN`, `SUPABASE_URL`,
+`SUPABASE_SECRET_KEY`, `GEMINI_API_KEY`, and `ADMIN_USER_IDS` as applicable.
+Keep secret values only in Render's environment settings. Render supplies
+`PORT`; the bot's HTTP health endpoint responds with status 200 at `/`.
+
+The health endpoint checks process reachability only; it does not prove that
+Telegram polling, Supabase, Gemini, or OCR is working. Keep one active polling
+instance per Telegram token. After an approved deployment, inspect Render logs
+for startup diagnostics, polling conflicts, Supabase schema errors, and the
+Tesseract readiness/version/language line. A free Render instance may sleep;
+the health endpoint does not keep it awake.
+
+## Rollback
+
+For an application rollback, redeploy the last known-good image or source
+revision from the Render Dashboard. Do not use a destructive Git reset. The
+screenshot cooldown migrations are additive and do not delete records; leave
+their tables/functions in place during an application rollback. Do not drop
+database objects as a rollback shortcut. Any database reversal requires a
+separately reviewed plan and a verified backup. The scheduled report Edge
+Function/Cron setup is optional and has its own instructions below.
 
 ## Current bot architecture
 
@@ -81,6 +181,22 @@ Set `ADMIN_USER_IDS` before using these. They are private admin operations; the 
 ```
 
 `/dailyreport` defaults to the current date in `REPORT_TIMEZONE` (default `Asia/Kolkata`). It stores an idempotent report in Supabase and sends the complete report as JSON and CSV to the admin who requested it. Reports paginate question rows in batches and retain every question, including duplicates. The legacy `/unanswered` command remains available and reads the older table; use `/questions unanswered` for new records.
+
+## Issue spike alerts
+
+Spike alerts are disabled until `ISSUE_SPIKE_CHAT_ID` is set to the private
+admin destination or admin group. They count explicit status reports for
+`ORDER_LOCKED`, `WITHDRAWAL_LOCKED`, `WITHDRAWAL_PENDING`, `DEPOSIT_PENDING`,
+and `PAYMENT_FAILED`. Defaults are 10 reports in a 15-minute window, with a
+15-minute alert cooldown. Alerts contain only category, report count, window,
+and distinct-user count; they do not include message text or usernames.
+
+Apply [`supabase/migrations/20261116_issue_spike_alerts.sql`](supabase/migrations/20261116_issue_spike_alerts.sql)
+before enabling this on Supabase. It creates a 30-day metadata history and an
+atomic alert-claim function. The SQLite fallback creates equivalent local
+tables automatically. Configure `ISSUE_SPIKE_THRESHOLD`,
+`ISSUE_SPIKE_WINDOW_MINUTES`, and `ISSUE_SPIKE_ALERT_COOLDOWN_SECONDS` to
+change the defaults.
 
 ## End-of-day delivery while the bot is offline
 
