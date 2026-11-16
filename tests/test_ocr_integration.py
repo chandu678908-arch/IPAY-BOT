@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -12,8 +11,7 @@ import bot
 
 class TesseractIntegrationTests(unittest.TestCase):
     def _tesseract_command(self):
-        configured = os.getenv("TESSERACT_CMD", "").strip()
-        command = shutil.which(configured) if configured else shutil.which("tesseract")
+        command = bot._resolve_tesseract_command()
         if not command:
             if os.getenv("REQUIRE_TESSERACT_TEST") == "1":
                 self.fail("Tesseract is required for this OCR integration test")

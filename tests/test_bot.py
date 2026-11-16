@@ -189,7 +189,22 @@ class BotTests(unittest.TestCase):
         )
 
         generate_content.side_effect = TimeoutError("simulated timeout")
-        self.assertFalse(
+        self.assertIsNone(
+            asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
+            )
+        )
+
+        generate_content.side_effect = bot.genai_errors.ServerError(
+            503,
+            {"error": {"code": 503, "status": "UNAVAILABLE"}},
+        )
+        self.assertIsNone(
             asyncio.run(
                 bot._gemini_confirms_screenshot_category(
                     client,
@@ -454,6 +469,19 @@ class BotTests(unittest.TestCase):
             "ProgramFiles(x86)": "",
             "LOCALAPPDATA": "",
         }, clear=False), patch.object(bot.shutil, "which", return_value=None):
+            resolved = bot._resolve_tesseract_command()
+        self.assertEqual(resolved, str(executable.resolve()))
+
+    def test_tesseract_auto_detection_finds_documents_install(self):
+        documents = self.root / "Documents"
+        documents.mkdir()
+        executable = documents / "tesseract.exe"
+        executable.write_bytes(b"test executable placeholder")
+        with patch.object(bot.Path, "home", return_value=self.root), patch.dict(
+            "os.environ",
+            {"TESSERACT_CMD": "", "ProgramFiles": "", "ProgramFiles(x86)": "", "LOCALAPPDATA": ""},
+            clear=False,
+        ), patch.object(bot.shutil, "which", return_value=None):
             resolved = bot._resolve_tesseract_command()
         self.assertEqual(resolved, str(executable.resolve()))
 
@@ -736,6 +764,19 @@ class BotTests(unittest.TestCase):
             on_conflict="chat_id,message_id",
             ignore_duplicates=True,
         )
+
+    def test_screenshot_claim_falls_back_to_sqlite_when_supabase_fails(self):
+        db_path = self.root / "screenshot-claim-fallback.sqlite3"
+        schema_key = str(db_path.resolve())
+        with patch.object(bot, "DB_PATH", db_path), patch.object(
+            bot, "supabase_enabled", return_value=True
+        ), patch.object(
+            bot, "supabase_client", side_effect=RuntimeError("storage unavailable")
+        ), self.assertLogs("ipay-bot", level="WARNING") as logs:
+            self.assertTrue(bot._claim_screenshot_reply(-100, 34))
+            self.assertFalse(bot._claim_screenshot_reply(-100, 34))
+        bot._DB_INITIALIZED_PATHS.discard(schema_key)
+        self.assertTrue(any("SCREENSHOT CLAIM FALLBACK" in line for line in logs.output))
 
     def test_supabase_storage_checks_screenshot_cooldown_table(self):
         response = SimpleNamespace(data=[])
@@ -1046,11 +1087,12 @@ class BotTests(unittest.TestCase):
                 ambiguous = make_update(28, 1, "ambiguous")
                 unrelated = make_update(22, 1, "unrelated")
                 await bot.group_screenshot_handler(unclear, context)
-                self.assertEqual(context.bot.send_message.await_count, 0)
+                self.assertEqual(context.bot.send_message.await_count, 1)
+                self.assertIn("read this image", context.bot.send_message.await_args.kwargs["text"])
                 await bot.group_screenshot_handler(ambiguous, context)
-                self.assertEqual(context.bot.send_message.await_count, 0)
+                self.assertEqual(context.bot.send_message.await_count, 1)
                 await bot.group_screenshot_handler(unrelated, context)
-                self.assertEqual(context.bot.send_message.await_count, 0)
+                self.assertEqual(context.bot.send_message.await_count, 1)
 
                 uploads = [
                     make_update(23, 2, "order-a"),
@@ -1069,12 +1111,12 @@ class BotTests(unittest.TestCase):
                     bot.group_screenshot_handler(update, context)
                     for update in duplicate_uploads
                 ])
-                self.assertEqual(context.bot.send_message.await_count, 5)
+                self.assertEqual(context.bot.send_message.await_count, 6)
                 reply_ids = {
                     call.kwargs["reply_to_message_id"]
                     for call in context.bot.send_message.await_args_list
                 }
-                self.assertEqual(reply_ids, {23, 24, 25, 26, 27})
+                self.assertEqual(reply_ids, {21, 23, 24, 25, 26, 27})
 
         with patch.object(bot, "DB_PATH", self.root / "concurrent-screenshots.sqlite3"):
             asyncio.run(scenario())
@@ -1460,6 +1502,51 @@ class BotTests(unittest.TestCase):
 
         confirm.assert_awaited_once()
         context.bot.send_message.assert_not_awaited()
+
+    def test_screenshot_reply_falls_back_to_strict_ocr_when_gemini_is_unavailable(self):
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={"gemini_client": object()}),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+        )
+        message = SimpleNamespace(
+            message_id=949,
+            photo=[SimpleNamespace(file_id="candidate-image")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=-949, type="supergroup"),
+            effective_user=SimpleNamespace(id=951),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "gemini-outage.sqlite3"),
+            patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=b"candidate-image-bytes"),
+            ),
+            patch.object(
+                bot,
+                "_read_screenshot_text",
+                new=AsyncMock(
+                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                ),
+            ),
+            patch.object(bot, "_claim_screenshot_image_cooldown", return_value=True),
+            patch.object(
+                bot,
+                "_gemini_confirms_screenshot_category",
+                new=AsyncMock(return_value=None),
+            ) as confirm,
+        ):
+            asyncio.run(bot.group_screenshot_handler(update, context))
+
+        confirm.assert_awaited_once()
+        context.bot.send_message.assert_awaited_once()
+        self.assertIn(
+            context.bot.send_message.await_args.kwargs["text"],
+            bot.WITHDRAWAL_IMAGE_REPLIES,
+        )
 
     def test_private_chat_screenshots_are_processed_and_replied_to(self):
         context = SimpleNamespace(

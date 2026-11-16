@@ -20,8 +20,9 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    Ordinary dashboard/menu screenshots do not qualify for a locking response.
    When local OCR finds a high-evidence locking/pending candidate and a Gemini
    client is configured, the resized screenshot is sent to Gemini Vision for
-   structured confirmation; a mismatch, invalid response, or API failure results
-   in no locking template. `SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD` defaults to
+   structured confirmation. A mismatch or invalid response results in no locking
+   template; a Gemini API outage falls back to the strict local OCR classification.
+   `SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD` defaults to
    `0.90`; the model's confidence is an estimate, not a calibrated probability.
    Without a configured Gemini client, strict local OCR remains the fallback.
    Screenshot bytes and OCR text are not logged or persisted by this classifier.

@@ -2083,7 +2083,7 @@ async def _gemini_confirms_screenshot_category(
     image_bytes: bytes,
     ocr_text: str,
     ocr_category: str,
-) -> bool:
+) -> Optional[bool]:
     category_map = {
         "order": ("ORDER_LOCKING", "order"),
         "withdrawal": ("WITHDRAWAL_LOCKING", "withdrawal"),
@@ -2119,13 +2119,14 @@ async def _gemini_confirms_screenshot_category(
             timeout=AI_TIMEOUT_SECONDS,
         )
         payload = json.loads(getattr(response, "text", "") or "")
-    except (
-        TimeoutError,
-        json.JSONDecodeError,
-        genai_errors.APIError,
-        OSError,
-        ValueError,
-    ) as exc:
+    except (TimeoutError, genai_errors.APIError) as exc:
+        log.warning(
+            "Gemini screenshot confirmation unavailable; using strict OCR "
+            "classification (error=%s)",
+            type(exc).__name__,
+        )
+        return None
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
         log.warning(
             "Gemini screenshot confirmation failed (error=%s)",
             type(exc).__name__,
@@ -2323,6 +2324,9 @@ def _resolve_tesseract_command(configured: Optional[str] = None) -> Optional[str
                 candidate = Path(root) / relative_path
                 if candidate.is_file():
                     return str(candidate.resolve())
+        documents_executable = Path.home() / "Documents" / "tesseract.exe"
+        if documents_executable.is_file():
+            return str(documents_executable.resolve())
     return None
 
 
@@ -2379,17 +2383,28 @@ def _preprocess_screenshot_for_ocr(image):
 def _claim_screenshot_reply(chat_id: int, message_id: int) -> bool:
     """Atomically claim a screenshot message so it is processed only once."""
     if supabase_enabled():
-        response = (
-            supabase_client()
-            .table("handled_screenshot_messages")
-            .upsert(
-                {"chat_id": chat_id, "message_id": message_id},
-                on_conflict="chat_id,message_id",
-                ignore_duplicates=True,
+        try:
+            response = (
+                supabase_client()
+                .table("handled_screenshot_messages")
+                .upsert(
+                    {"chat_id": chat_id, "message_id": message_id},
+                    on_conflict="chat_id,message_id",
+                    ignore_duplicates=True,
+                )
+                .execute()
             )
-            .execute()
-        )
-        return bool(response.data)
+            return bool(response.data)
+        except Exception as exc:
+            # A missing/unavailable Supabase table must not make every image
+            # unusable. SQLite still gives atomic idempotency on this instance.
+            log.warning(
+                "SCREENSHOT CLAIM FALLBACK (chat_id=%s, message_id=%s, "
+                "store=sqlite, error=%s)",
+                chat_id,
+                message_id,
+                type(exc).__name__,
+            )
 
     with closing(db()) as conn:
         cursor = conn.execute(
@@ -2561,9 +2576,14 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         )
     except Exception as exc:
         log.error(
-            "Could not persist screenshot message claim; skipping processing (%s)",
+            "SCREENSHOT CLAIM FAILED (chat_id=%s, message_id=%s, user_id=%s, "
+            "stage=sqlite_claim, error=%s)",
+            chat.id,
+            message.message_id,
+            getattr(getattr(update, "effective_user", None), "id", None),
             type(exc).__name__,
         )
+        await _send_screenshot_help(context, chat.id, message.message_id)
         return
     if not claimed:
         log.info(
@@ -2580,6 +2600,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
 
     image_bytes = await _download_screenshot_bytes(message, context)
     if image_bytes is None:
+        log.warning(
+            "SCREENSHOT STOPPED (chat_id=%s, message_id=%s, stage=download_or_validation)",
+            chat.id,
+            message.message_id,
+        )
+        await _send_screenshot_help(context, chat.id, message.message_id)
         return
 
     user = getattr(update, "effective_user", None) or getattr(
@@ -2643,9 +2669,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
     ocr_text = await _read_screenshot_text(message, context, image_bytes)
     if not ocr_text:
         log.info(
-            "CLASSIFICATION RESULT (message_id=%s, category=none, reason=no_ocr_text)",
+            "SCREENSHOT STOPPED (chat_id=%s, message_id=%s, stage=ocr, "
+            "category=UNREADABLE_SCREEN)",
+            chat.id,
             message.message_id,
         )
+        await _send_screenshot_help(context, chat.id, message.message_id)
         return
     category = _classify_screenshot(ocr_text)
     if not category:
@@ -2656,19 +2685,28 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         )
         return
     gemini_client = context.application.bot_data.get("gemini_client")
-    if gemini_client and not await _gemini_confirms_screenshot_category(
-        gemini_client,
-        image_bytes,
-        ocr_text,
-        category,
-    ):
-        log.info(
-            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
-            "category=UNKNOWN_SCREEN, reason=vision_not_confirmed)",
-            chat.id,
-            message.message_id,
+    if gemini_client:
+        vision_confirmed = await _gemini_confirms_screenshot_category(
+            gemini_client,
+            image_bytes,
+            ocr_text,
+            category,
         )
-        return
+        if vision_confirmed is False:
+            log.info(
+                "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
+                "category=UNKNOWN_SCREEN, reason=vision_not_confirmed)",
+                chat.id,
+                message.message_id,
+            )
+            return
+        if vision_confirmed is None:
+            log.info(
+                "Gemini unavailable; proceeding with strict OCR classification "
+                "(chat_id=%s, message_id=%s)",
+                chat.id,
+                message.message_id,
+            )
     log.info(
         "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, category=%s)",
         chat.id,
@@ -2695,7 +2733,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
     try:
         await _reply_to_screenshot(context, chat.id, message.message_id, selected)
     except TelegramError as exc:
-        log.warning("Could not send screenshot reply (%s)", type(exc).__name__)
+        log.warning(
+            "SCREENSHOT REPLY FAILED (chat_id=%s, message_id=%s, stage=send, error=%s)",
+            chat.id,
+            message.message_id,
+            type(exc).__name__,
+        )
     else:
         log.info(
             "Sent screenshot reply (chat_id=%s, message_id=%s)",
@@ -2711,6 +2754,26 @@ async def _reply_to_screenshot(context, chat_id: int, message_id: int, text: str
         text=text,
         reply_to_message_id=message_id,
     )
+
+
+async def _send_screenshot_help(context, chat_id: int, message_id: int) -> None:
+    """Give one actionable response when an image could not be processed."""
+    try:
+        await _reply_to_screenshot(
+            context,
+            chat_id,
+            message_id,
+            "I couldn’t read this image. Please resend a clear, uncropped iPAY "
+            "screenshot or describe the issue in a message.",
+        )
+    except TelegramError as exc:
+        log.warning(
+            "SCREENSHOT HELP REPLY FAILED (chat_id=%s, message_id=%s, "
+            "stage=send_help, error=%s)",
+            chat_id,
+            message_id,
+            type(exc).__name__,
+        )
 
 
 async def questions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
