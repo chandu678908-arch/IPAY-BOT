@@ -109,6 +109,9 @@ AI_ENABLED = os.getenv("AI_ENABLED", "true").strip().casefold() not in {
 }
 AI_MAX_OUTPUT_TOKENS = max(1, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "300")))
 AI_TIMEOUT_SECONDS = max(1.0, float(os.getenv("AI_TIMEOUT_SECONDS", "45")))
+SCREENSHOT_VISION_TIMEOUT_SECONDS = max(
+    1.0, float(os.getenv("SCREENSHOT_VISION_TIMEOUT_SECONDS", "8"))
+)
 SUPPORT_1 = os.getenv("SUPPORT_1", "@Ipay800").strip()
 SUPPORT_2 = os.getenv("SUPPORT_2", "@Roas668").strip()
 SUPPORT_3 = os.getenv("SUPPORT_3", "@Ipay811").strip()
@@ -2332,7 +2335,7 @@ async def _gemini_confirms_screenshot_category(
                     max_output_tokens=300,
                 ),
             ),
-            timeout=AI_TIMEOUT_SECONDS,
+            timeout=SCREENSHOT_VISION_TIMEOUT_SECONDS,
         )
         payload = json.loads(getattr(response, "text", "") or "")
     except (TimeoutError, genai_errors.APIError) as exc:

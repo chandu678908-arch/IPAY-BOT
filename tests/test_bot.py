@@ -330,13 +330,22 @@ class BotTests(unittest.TestCase):
             )
         )
 
-        confirmed = asyncio.run(
-            bot._gemini_confirms_screenshot_category(
-                client,
-                image_bytes,
-                "Withdrawal Locking 100 Quota -100 Balance 27",
-                "withdrawal",
+        with patch.object(
+            bot.asyncio,
+            "wait_for",
+            wraps=asyncio.wait_for,
+        ) as wait_for:
+            confirmed = asyncio.run(
+                bot._gemini_confirms_screenshot_category(
+                    client,
+                    image_bytes,
+                    "Withdrawal Locking 100 Quota -100 Balance 27",
+                    "withdrawal",
+                )
             )
+        self.assertEqual(
+            wait_for.call_args.kwargs["timeout"],
+            bot.SCREENSHOT_VISION_TIMEOUT_SECONDS,
         )
         self.assertTrue(confirmed)
         call = generate_content.await_args

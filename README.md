@@ -40,6 +40,9 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    OCR smoke test during the build; local hosts need Tesseract available on
    `PATH` or configured with `TESSERACT_CMD`. Each Tesseract pass is limited to
    30 seconds by default; set `SCREENSHOT_OCR_TIMEOUT_SECONDS` to tune it.
+   Gemini Vision confirmation has a separate 8-second limit by default; on
+   timeout the existing strict OCR fallback proceeds. Set
+   `SCREENSHOT_VISION_TIMEOUT_SECONDS` to tune it.
 
    For an existing Supabase project, review and approve both
    [`supabase/migrations/20261114_screenshot_reply_claims.sql`](supabase/migrations/20261114_screenshot_reply_claims.sql)
