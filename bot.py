@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import threading
 import time
+import traceback
 import unicodedata
 from contextlib import closing
 from dataclasses import dataclass
@@ -81,6 +82,12 @@ def _safe_error_detail(exc: Exception) -> str:
         if secret:
             detail = detail.replace(secret, "[redacted]")
     return re.sub(r"\s+", " ", detail).strip()[:400]
+
+
+def _safe_exception_traceback(exc: Exception) -> str:
+    """Log stack frames without exception text, which may contain image data or secrets."""
+    frames = "".join(traceback.format_list(traceback.extract_tb(exc.__traceback__)))
+    return f"Traceback (most recent call last):\n{frames}{type(exc).__name__}: [details redacted]".rstrip()
 
 
 def _asset_path(value: str) -> Path:
@@ -234,6 +241,9 @@ SCREENSHOT_IMAGE_COOLDOWN_SECONDS = max(
 )
 MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
 MAX_SCREENSHOT_PIXELS = 40_000_000
+SCREENSHOT_OCR_TIMEOUT_SECONDS = max(
+    1.0, float(os.getenv("SCREENSHOT_OCR_TIMEOUT_SECONDS", "30"))
+)
 
 HI_RESPONSE = (
     "👋 Hello! Welcome to iPAY!\n\n"
@@ -2420,9 +2430,10 @@ async def _download_screenshot_bytes(message, context) -> Optional[bytes]:
         image_bytes = bytes(await telegram_file.download_as_bytearray())
     except Exception as exc:
         log.warning(
-            "IMAGE DOWNLOAD FAILED (message_id=%s, error=%s)",
+            "IMAGE DOWNLOAD FAILED (message_id=%s, error=%s)\n%s",
             getattr(message, "message_id", None),
             type(exc).__name__,
+            _safe_exception_traceback(exc),
         )
         return None
     if not image_bytes or len(image_bytes) > MAX_SCREENSHOT_BYTES:
@@ -2444,9 +2455,10 @@ async def _download_screenshot_bytes(message, context) -> Optional[bytes]:
             image.verify()
     except Exception as exc:
         log.warning(
-            "IMAGE VALIDATION FAILED (message_id=%s, error=%s)",
+            "IMAGE VALIDATION FAILED (message_id=%s, error=%s)\n%s",
             getattr(message, "message_id", None),
             type(exc).__name__,
+            _safe_exception_traceback(exc),
         )
         return None
     log.info(
@@ -2471,10 +2483,11 @@ async def _read_screenshot_text(
     try:
         from PIL import Image  # noqa: F401
         import pytesseract
-    except ImportError:
+    except ImportError as exc:
         log.warning(
-            "OCR START FAILED (message_id=%s, dependencies_missing=true)",
+            "OCR START FAILED (message_id=%s, dependencies_missing=true)\n%s",
             getattr(message, "message_id", None),
+            _safe_exception_traceback(exc),
         )
         return None
 
@@ -2483,9 +2496,10 @@ async def _read_screenshot_text(
         text = await asyncio.to_thread(_tesseract_ocr_bytes, image_bytes)
     except Exception as exc:
         log.warning(
-            "OCR FAILED (message_id=%s, error=%s)",
+            "OCR FAILED (message_id=%s, error=%s)\n%s",
             getattr(message, "message_id", None),
             type(exc).__name__,
+            _safe_exception_traceback(exc),
         )
         return None
     log.info(
@@ -2506,6 +2520,7 @@ def _resolve_tesseract_command(configured: Optional[str] = None) -> Optional[str
         configured_path = Path(configured).expanduser()
         if configured_path.is_file():
             return str(configured_path.resolve())
+        return None
 
     for executable in ("tesseract", "tesseract.exe"):
         resolved = shutil.which(executable)
@@ -2550,7 +2565,11 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
     with Image.open(io.BytesIO(image_bytes)) as image:
         try:
             prepared = _preprocess_screenshot_for_ocr(image)
-            text = pytesseract.image_to_string(prepared, lang="eng")
+            text = pytesseract.image_to_string(
+                prepared,
+                lang="eng",
+                timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+            )
             normalized = re.sub(r"[^a-z]+", " ", text.casefold())
             if re.search(r"\btransition\s+information\b", normalized):
                 from PIL import ImageOps
@@ -2575,6 +2594,7 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
                     detailed,
                     lang="eng",
                     config="--psm 6",
+                    timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
                 )
                 stamp = image.crop(
                     (
@@ -2592,6 +2612,7 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
                     stamp,
                     lang="eng",
                     config="--psm 6",
+                    timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
                 )
                 if stamp_text.strip():
                     detail_text = f"{detail_text}\n{stamp_text}"
@@ -2987,6 +3008,14 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         "withdrawal_pending": WITHDRAWAL_PENDING_IMAGE_REPLIES,
     }
     templates = templates_by_category[category]
+    log.info(
+        "Screenshot reply collection selected (chat_id=%s, message_id=%s, "
+        "category=%s, reply_count=%s)",
+        chat.id,
+        message.message_id,
+        spike_category,
+        len(templates),
+    )
     user = update.effective_user
     user_id = getattr(user, "id", None)
     bot_data = context.application.bot_data
@@ -2996,10 +3025,11 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         await _reply_to_screenshot(context, chat.id, message.message_id, selected)
     except TelegramError as exc:
         log.warning(
-            "SCREENSHOT REPLY FAILED (chat_id=%s, message_id=%s, stage=send, error=%s)",
+            "SCREENSHOT REPLY FAILED (chat_id=%s, message_id=%s, stage=send, error=%s)\n%s",
             chat.id,
             message.message_id,
             type(exc).__name__,
+            _safe_exception_traceback(exc),
         )
     else:
         log.info(

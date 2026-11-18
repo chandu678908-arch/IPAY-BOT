@@ -654,7 +654,11 @@ class BotTests(unittest.TestCase):
         ), patch.object(bot, "_preprocess_screenshot_for_ocr", return_value=fake_image):
             self.assertEqual(bot._tesseract_ocr_bytes(b"image"), "Order Locking 100 Quota 104")
         self.assertEqual(fake_pytesseract.pytesseract.tesseract_cmd, "/usr/bin/tesseract")
-        fake_pytesseract.image_to_string.assert_called_once_with(fake_image, lang="eng")
+        fake_pytesseract.image_to_string.assert_called_once_with(
+            fake_image,
+            lang="eng",
+            timeout=bot.SCREENSHOT_OCR_TIMEOUT_SECONDS,
+        )
 
     def test_tesseract_auto_detection_finds_install_under_program_files(self):
         install_root = self.root / "Programs"
@@ -682,6 +686,14 @@ class BotTests(unittest.TestCase):
         ), patch.object(bot.shutil, "which", return_value=None):
             resolved = bot._resolve_tesseract_command()
         self.assertEqual(resolved, str(executable.resolve()))
+
+    def test_invalid_configured_tesseract_path_does_not_fall_back_to_path(self):
+        configured = str(self.root / "missing-tesseract.exe")
+        with patch.dict("os.environ", {"TESSERACT_CMD": configured}), patch.object(
+            bot.shutil, "which", return_value=None
+        ) as which:
+            self.assertIsNone(bot._resolve_tesseract_command())
+        which.assert_called_once_with(configured)
 
     def test_tesseract_ocr_reports_clear_error_when_not_installed(self):
         with patch.object(bot, "_resolve_tesseract_command", return_value=None):
@@ -1219,6 +1231,55 @@ class BotTests(unittest.TestCase):
         with self.assertLogs("ipay-bot", level="WARNING"):
             result = asyncio.run(bot._download_screenshot_bytes(message, context))
         self.assertIsNone(result)
+
+    def test_screenshot_download_accepts_jpeg_png_and_webp(self):
+        async def scenario():
+            for image_format in ("JPEG", "PNG", "WEBP"):
+                with self.subTest(image_format=image_format):
+                    image = Image.new("RGB", (32, 24), "white")
+                    encoded = BytesIO()
+                    image.save(encoded, format=image_format)
+                    image_bytes = encoded.getvalue()
+                    telegram_file = SimpleNamespace(
+                        download_as_bytearray=AsyncMock(return_value=image_bytes)
+                    )
+                    context = SimpleNamespace(
+                        bot=SimpleNamespace(
+                            get_file=AsyncMock(return_value=telegram_file)
+                        )
+                    )
+                    message = SimpleNamespace(
+                        message_id=59,
+                        photo=[SimpleNamespace(file_id=f"{image_format}-id")],
+                        document=None,
+                    )
+
+                    self.assertEqual(
+                        await bot._download_screenshot_bytes(message, context),
+                        image_bytes,
+                    )
+                    context.bot.get_file.assert_awaited_once_with(
+                        f"{image_format}-id"
+                    )
+
+        asyncio.run(scenario())
+
+    def test_screenshot_download_failure_is_logged_with_traceback(self):
+        message = SimpleNamespace(
+            message_id=60,
+            photo=[SimpleNamespace(file_id="unavailable-file-id")],
+            document=None,
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(
+                get_file=AsyncMock(side_effect=RuntimeError("download unavailable"))
+            )
+        )
+        with self.assertLogs("ipay-bot", level="WARNING") as logs:
+            result = asyncio.run(bot._download_screenshot_bytes(message, context))
+        self.assertIsNone(result)
+        self.assertIn("IMAGE DOWNLOAD FAILED", "\n".join(logs.output))
+        self.assertIn("_download_screenshot_bytes", "\n".join(logs.output))
 
     def test_screenshot_ocr_logs_stages_without_logging_image_or_ocr_content(self):
         async def scenario():
