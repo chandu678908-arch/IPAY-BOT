@@ -1972,6 +1972,7 @@ def _normalize_transition_information_ocr(normalized_text: str) -> str:
         (r"\b(?:acme|acmel)\s+art\b", "actual amt"),
         (r"\brecetved\b", "received"),
         (r"\brroerved\b", "received"),
+        (r"\bocking\b", "locking"),
     )
     for pattern, replacement in corrections:
         normalized_text = re.sub(pattern, replacement, normalized_text)
@@ -2016,9 +2017,17 @@ def _is_transition_information_withdrawal_lock(normalized_text: str) -> bool:
     )
 
 
+def _has_populated_transition_utr(normalized_text: str) -> bool:
+    return any(
+        re.search(r"\d", match.group(1))
+        for match in re.finditer(r"\butr\s+([a-z0-9]{6,})\b", normalized_text)
+    )
+
+
 def _classify_transition_information_lock(text: str) -> Optional[str]:
     normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold())
     normalized = _normalize_transition_information_ocr(normalized)
+    has_populated_utr = _has_populated_transition_utr(normalized)
     has_transition_heading = _is_transition_information_layout(normalized)
     if not has_transition_heading:
         # Do not let a regular task-payment screen become a transition-lock
@@ -2028,6 +2037,7 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
         has_go_to_transfer = bool(re.search(r"\bgo\s+to\s+transfer\b", normalized))
         if (
             _is_transition_information_order_lock(normalized)
+            and has_populated_utr
             and not has_go_to_transfer
             and re.search(r"\bok\b", normalized)
             and re.search(r"\bpaid\b", normalized)
@@ -2035,6 +2045,7 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
             return "order"
         if (
             _is_transition_information_withdrawal_lock(normalized)
+            and not has_populated_utr
             and re.search(r"\bok\b", normalized)
         ):
             return "withdrawal"
@@ -2042,9 +2053,12 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
     # The complete, distinctive field sets are stronger than a possibly
     # misread page heading. Check the order layout first so an OCR false
     # positive for "withdrawal" cannot steal a payment-task order screenshot.
-    if _is_transition_information_order_lock(normalized):
+    if _is_transition_information_order_lock(normalized) and has_populated_utr:
         return "order"
-    if _is_transition_information_withdrawal_lock(normalized):
+    if (
+        _is_transition_information_withdrawal_lock(normalized)
+        and not has_populated_utr
+    ):
         return "withdrawal"
     return None
 
@@ -2097,14 +2111,46 @@ def _has_explicit_order_lock_status(normalized_text: str) -> bool:
     )
 
 
-def _has_withdrawal_lock_status_context(normalized_text: str) -> bool:
-    """Require the locking status to be visibly tied to a withdrawal label."""
+def _has_transaction_record_fields(normalized_text: str) -> bool:
+    """Require labeled transaction fields, without relying on their values."""
+    return bool(
+        re.search(r"\bquota\b", normalized_text)
+        and re.search(r"\bbalance\b", normalized_text)
+    )
+
+
+def _has_screenshot_date_range(text: str) -> bool:
     return bool(
         re.search(
-            r"\bwithdraw(?:al)?\b(?:\s+\w+){0,4}\s+\b(?:locked|locking)\b|"
-            r"\b(?:locked|locking)\b(?:\s+\w+){0,4}\s+\bwithdraw(?:al)?\b",
-            normalized_text,
+            r"\b\d{1,2}/\d{1,2}/\d{4}\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4}\b",
+            text,
         )
+    )
+
+
+def _is_withdrawal_locked_list_layout(normalized_text: str, text: str) -> bool:
+    return bool(
+        re.search(r"\bwithdraw(?:al)?\b", normalized_text)
+        and _has_screenshot_date_range(text)
+        and _has_transaction_record_fields(normalized_text)
+        and re.search(r"\blocking\b", normalized_text)
+        and re.search(r"\b\d{1,2}:\d{2}:\d{2}\b", text)
+    )
+
+
+def _is_order_locked_list_layout(normalized_text: str, text: str) -> bool:
+    return bool(
+        re.search(r"\binr\b", normalized_text)
+        and re.search(r"\busdt\b", normalized_text)
+        and _has_screenshot_date_range(text)
+        and len(re.findall(r"\blocking\b", normalized_text)) >= 1
+        and re.search(r"\bincome\b", normalized_text)
+        and re.search(r"\bactivity\b", normalized_text)
+        and _has_transaction_record_fields(normalized_text)
+        and re.search(r"\bfeedback\s+received\b", normalized_text)
+        and re.search(r"\bwaiting\s+for\s+processing\b", normalized_text)
+        and re.search(r"\bproceed\b", normalized_text)
+        and re.search(r"\b\d{1,2}:\d{2}:\d{2}\b", text)
     )
 
 
@@ -2116,7 +2162,8 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
         return transition_category
     if _is_transition_information_layout(normalized):
         return None
-    if _is_order_payment_task_layout(text):
+    task_payment_layout = _is_order_payment_task_layout(text)
+    if task_payment_layout:
         if (
             re.search(r"\bwithdraw(?:al)?\b", normalized)
             or not _has_explicit_order_lock_status(normalized)
@@ -2125,32 +2172,13 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
     has_lock_status = bool(re.search(r"\b(?:locked|locking)\b", normalized))
     if not has_lock_status:
         return None
-    order_heading = bool(re.search(r"\border\b", normalized))
-    withdrawal_heading = bool(re.search(r"\bwithdraw(?:al)?\b", normalized))
-    if order_heading and withdrawal_heading:
-        return None
-    if withdrawal_heading and not _has_withdrawal_lock_status_context(normalized):
-        return None
-    order_record_context = bool(
-        re.search(r"\b(?:inr|usdt)\b", normalized)
-        and re.search(r"\b(?:income|activity)\b", normalized)
-        and re.search(r"\b(?:feedback received|waiting for processing)\b", normalized)
-    )
-    if not withdrawal_heading and not order_heading and not order_record_context:
-        return None
-    has_record_fields = bool(
-        re.search(r"\b(?:quota|balance|amount|transaction|upi|bank)\b", normalized)
-    )
-    has_locking_amount = bool(
-        re.search(
-            r"\b(?:locked|locking)\b(?:\W+\w+){0,4}\W+\d+[,.]\d{2}\b|"
-            r"\b\d+[,.]\d{2}\b(?:\W+\w+){0,4}\W+\b(?:locked|locking)\b",
-            text.casefold(),
-        )
-    )
-    if not (has_record_fields or has_locking_amount):
-        return None
-    return "withdrawal" if withdrawal_heading else "order"
+    if task_payment_layout:
+        return "order"
+    if _is_withdrawal_locked_list_layout(normalized, text):
+        return "withdrawal"
+    if _is_order_locked_list_layout(normalized, text):
+        return "order"
+    return None
 
 
 def _classify_screenshot(text: str) -> Optional[str]:
@@ -2177,9 +2205,9 @@ def _classify_screenshot(text: str) -> Optional[str]:
         r"reject(?:ed)?|cancel(?:led|ed)|declin(?:e|ed))\b",
         normalized,
     )
-    withdrawal_record_context = re.search(
-        r"\b(?:quota|balance|amount|transaction|history|upi|bank|date|rs)\b",
-        normalized,
+    withdrawal_record_context = bool(
+        re.search(r"\bquota\b", normalized)
+        and re.search(r"\bbalance\b", normalized)
     )
     transaction_status_pair = re.search(
         r"\bwithdrawal\b(?:\W+\w+){0,8}\W+\bpending\b|"
@@ -2808,7 +2836,6 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             getattr(getattr(update, "effective_user", None), "id", None),
             type(exc).__name__,
         )
-        await _send_screenshot_help(context, chat.id, message.message_id)
         return
     if not claimed:
         log.info(
@@ -2825,12 +2852,12 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
 
     image_bytes = await _download_screenshot_bytes(message, context)
     if image_bytes is None:
-        log.warning(
-            "SCREENSHOT STOPPED (chat_id=%s, message_id=%s, stage=download_or_validation)",
+        log.info(
+            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
+            "category=UNKNOWN_SCREEN, reason=image_unavailable, action=IGNORE)",
             chat.id,
             message.message_id,
         )
-        await _send_screenshot_help(context, chat.id, message.message_id)
         return
 
     user = getattr(update, "effective_user", None) or getattr(
@@ -2894,17 +2921,17 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
     ocr_text = await _read_screenshot_text(message, context, image_bytes)
     if not ocr_text:
         log.info(
-            "SCREENSHOT STOPPED (chat_id=%s, message_id=%s, stage=ocr, "
-            "category=UNREADABLE_SCREEN)",
+            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
+            "category=UNKNOWN_SCREEN, reason=unreadable_ocr)",
             chat.id,
             message.message_id,
         )
-        await _send_screenshot_help(context, chat.id, message.message_id)
         return
     category = _classify_screenshot(ocr_text)
     if not category:
         log.info(
-            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, category=OTHER_IPAY_SCREEN_OR_UNKNOWN)",
+            "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
+            "category=UNKNOWN_SCREEN, action=IGNORE)",
             chat.id,
             message.message_id,
         )
@@ -2989,26 +3016,6 @@ async def _reply_to_screenshot(context, chat_id: int, message_id: int, text: str
         text=text,
         reply_to_message_id=message_id,
     )
-
-
-async def _send_screenshot_help(context, chat_id: int, message_id: int) -> None:
-    """Give one actionable response when an image could not be processed."""
-    try:
-        await _reply_to_screenshot(
-            context,
-            chat_id,
-            message_id,
-            "I couldn’t read this image. Please resend a clear, uncropped iPAY "
-            "screenshot or describe the issue in a message.",
-        )
-    except TelegramError as exc:
-        log.warning(
-            "SCREENSHOT HELP REPLY FAILED (chat_id=%s, message_id=%s, "
-            "stage=send_help, error=%s)",
-            chat_id,
-            message_id,
-            type(exc).__name__,
-        )
 
 
 async def questions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

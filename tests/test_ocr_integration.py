@@ -24,14 +24,20 @@ class TesseractIntegrationTests(unittest.TestCase):
     def test_tesseract_executes_ocr_on_generated_test_image(self):
         self._tesseract_command()
 
-        image = Image.new("RGB", (480, 100), "white")
-        ImageDraw.Draw(image).text(
-            (12, 24),
-            "ORDER LOCKING 100 QUOTA 104",
-            font=ImageFont.load_default(),
-            fill="black",
+        image = Image.new("RGB", (1400, 300), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default(size=24)
+        lines = (
+            "INR USDT",
+            "09/11/2026 - 15/11/2026",
+            "LOCKING 22:58:41",
+            "INCOME ACTIVITY QUOTA BALANCE",
+            "FEEDBACK RECEIVED WAITING FOR PROCESSING",
+            "PROCEED",
         )
-        image = image.resize((1920, 400), Image.Resampling.NEAREST)
+        for index, line in enumerate(lines):
+            draw.text((12, 8 + index * 44), line, font=font, fill="black")
+        image = image.resize((2800, 600), Image.Resampling.NEAREST)
         image_bytes = BytesIO()
         image.save(image_bytes, format="PNG")
 
@@ -85,6 +91,30 @@ class TesseractIntegrationTests(unittest.TestCase):
                 "withdrawal",
                 bot.WITHDRAWAL_IMAGE_REPLIES,
                 True,
+            ),
+            (
+                "01_WITHDRAWAL_LOCKED_transition_blank_UTR.png",
+                "withdrawal",
+                bot.WITHDRAWAL_IMAGE_REPLIES,
+                True,
+            ),
+            (
+                "02_WITHDRAWAL_LOCKED_withdrawal_list.png",
+                "withdrawal",
+                bot.WITHDRAWAL_IMAGE_REPLIES,
+                False,
+            ),
+            (
+                "03_ORDER_LOCKED_transition_populated_UTR.png",
+                "order",
+                bot.ORDER_IMAGE_REPLIES,
+                True,
+            ),
+            (
+                "04_ORDER_LOCKED_order_list.png",
+                "order",
+                bot.ORDER_IMAGE_REPLIES,
+                False,
             ),
             ("03_payment_task.png", None, (), False),
             ("04_normal_dashboard.png", None, (), False),
@@ -154,6 +184,10 @@ class TesseractIntegrationTests(unittest.TestCase):
                     sender.assert_awaited_once()
                     reply = sender.await_args.kwargs["text"]
                     self.assertIn(reply, replies)
+                    if expected == "order":
+                        self.assertNotIn(reply, bot.WITHDRAWAL_IMAGE_REPLIES)
+                    elif expected == "withdrawal":
+                        self.assertNotIn(reply, bot.ORDER_IMAGE_REPLIES)
                     self.assertEqual(
                         sender.await_args.kwargs.get("reply_to_message_id"),
                         message_id,

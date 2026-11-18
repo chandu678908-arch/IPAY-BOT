@@ -57,37 +57,36 @@ class BotTests(unittest.TestCase):
         # Visible text from the supplied Order reference screenshot.
         self.assertEqual(
             bot._classify_locked_screenshot(
-                "Order INR USDT Locking 11000.00 Income 418 (3.8%) Quota 11418.00 "
-                "Balance 10.51 Feedback received, waiting for processing"
+                "Order INR USDT 09/11/2026 - 15/11/2026 Locking Locking "
+                "22:58:41 Income Activity Quota Balance Feedback received, "
+                "waiting for processing Proceed"
             ),
             "order",
         )
         # Visible text from the supplied Withdrawal reference screenshot.
         self.assertEqual(
             bot._classify_locked_screenshot(
-                "Withdrawal Locking 100.00 Quota -100.00 Balance 27.4"
+                "Withdrawal 08/11/2026 - 14/11/2026 Locking Locking "
+                "09:05:04 14/11/2026 Quota Balance"
             ),
             "withdrawal",
         )
-        self.assertEqual(
-            bot._classify_locked_screenshot("Withdrawal 100.00 Locking"),
-            "withdrawal",
+        self.assertIsNone(
+            bot._classify_locked_screenshot("Withdrawal 100.00 Locking")
         )
-        self.assertEqual(
-            bot._classify_locked_screenshot("Order Locking 100.00"),
-            "order",
-        )
+        self.assertIsNone(bot._classify_locked_screenshot("Order Locking 100.00"))
         self.assertEqual(
             bot._classify_locked_screenshot(
-                "INR USDT Locking Income 13.2 Activity Quota 345.20 "
-                "Balance 10 Feedback received, waiting for processing"
+                "INR USDT 09/11/2026 - 15/11/2026 Locking Locking "
+                "22:58:41 Income Activity Quota Balance Feedback received, "
+                "waiting for processing Proceed"
             ),
             "order",
         )
         self.assertIsNone(
             bot._classify_locked_screenshot(
-                "INR USDT Income Activity Quota 345.20 Balance 10 "
-                "Feedback received, waiting for processing"
+                "INR USDT 09/11/2026 - 15/11/2026 Income Activity Quota "
+                "Balance Feedback received, waiting for processing Proceed"
             )
         )
         self.assertEqual(
@@ -115,14 +114,16 @@ class BotTests(unittest.TestCase):
 
     def test_withdrawal_lock_requires_nearby_transaction_status_evidence(self):
         genuine_withdrawal = (
-            "Withdrawal Locking 100.00 Quota -100.00 Balance 27.4"
+            "Withdrawal 08/11/2026 - 14/11/2026 Locking Locking "
+            "09:05:04 14/11/2026 Quota Balance"
         )
         self.assertEqual(
             bot._classify_screenshot(genuine_withdrawal), "withdrawal"
         )
         self.assertEqual(
             bot._classify_screenshot(
-                "Locking Withdrawal 100.00 Quota -100.00 Balance 27.4"
+                "08/11/2026 - 14/11/2026 Locking Withdrawal Locking "
+                "09:05:04 Quota Balance"
             ),
             "withdrawal",
         )
@@ -236,6 +237,16 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             bot._classify_screenshot(withdrawal_transition), "withdrawal"
         )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                order_transition.replace("UTR 631922777297", "UTR")
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                withdrawal_transition + " UTR 631922777297"
+            )
+        )
         self.assertEqual(
             bot._classify_locked_screenshot(withdrawal_transition), "withdrawal"
         )
@@ -258,7 +269,7 @@ class BotTests(unittest.TestCase):
             bot._classify_screenshot(withdrawal_transition_ocr), "withdrawal"
         )
 
-        # The red stamp/status is required; an empty UTR or amount cannot classify.
+        # Complete field layouts still require a visible locking status.
         self.assertIsNone(
             bot._classify_screenshot(order_transition.replace(" Locking", ""))
         )
@@ -271,6 +282,17 @@ class BotTests(unittest.TestCase):
             bot._classify_screenshot(
                 "Transition Information Task ID 1 Order ID 2 UTR "
                 "Amount 330.00 Locking"
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Transition Information Task ID 1 Order ID 2 UTR Locking"
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Transition Information Task ID 1 Order ID 2 UTR "
+                "220732002331 Locking"
             )
         )
 
@@ -431,15 +453,15 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(
             bot._classify_screenshot(
-                "Withdrawal Locking Pending 100 Quota -100 Balance 27"
+                "Withdrawal 08/11/2026 - 14/11/2026 Locking Locking Pending "
+                "09:05:04 Quota Balance"
             ),
             "withdrawal",
         )
-        self.assertEqual(
+        self.assertIsNone(
             bot._classify_screenshot(
-                "Order Locking Pending 100 Quota 104 Balance 5"
-            ),
-            "order",
+                "Order Locking Pending 100.00 Quota 104.00 Balance 5.00"
+            )
         )
         self.assertIsNone(bot._classify_screenshot("Unrelated Pending photo"))
         self.assertIsNone(
@@ -730,14 +752,23 @@ class BotTests(unittest.TestCase):
 
     def test_locked_screenshot_classifier_accepts_layout_variations(self):
         order_variations = (
-            "Locking Order USDT 70 Quota 72 Balance 5",
-            "ORDER Locking income 4 commission quota 104 balance 10",
-            "Order INR locking amount 500 feedback received processing",
+            "Order INR USDT 09/11/2026 - 15/11/2026 Locking Locking "
+            "22:58:41 Income Activity Quota Balance Feedback received "
+            "waiting for processing Proceed",
+            "INR USDT 09/11/2026 - 15/11/2026 Locking income activity "
+            "quota balance feedback received waiting for processing proceed "
+            "22:58:41",
+            "Order USDT INR 09/11/2026 - 15/11/2026 locking "
+            "22:58:41 Income Activity Quota Balance feedback received "
+            "waiting for processing Proceed",
         )
         withdrawal_variations = (
-            "Locking Withdrawal 100 quota -100 balance 27",
-            "WITHDRAW withdrawal amount 250 locking quota 250",
-            "Withdrawal locking available balance 200 quota -50",
+            "Locking Withdrawal 08/11/2026 - 14/11/2026 Locking "
+            "09:05:04 quota balance",
+            "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+            "Quota Balance 09:05:04",
+            "Withdrawal Locking 08/11/2026 - 14/11/2026 "
+            "09:05:04 Locking available balance quota",
         )
         for text in order_variations:
             self.assertEqual(bot._classify_locked_screenshot(text), "order")
@@ -781,7 +812,13 @@ class BotTests(unittest.TestCase):
             ), patch.object(
                 bot,
                 "_read_screenshot_text",
-                new=AsyncMock(return_value="Order INR Locking 11000 Quota 11418"),
+                new=AsyncMock(
+                    return_value=(
+                        "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                        "Locking 22:58:41 Income Activity Quota Balance "
+                        "Feedback received waiting for processing Proceed"
+                    )
+                ),
             ), patch.object(
                 bot.random,
                 "choice",
@@ -848,9 +885,13 @@ class BotTests(unittest.TestCase):
                 ),
                 "pending-document-b": (
                     "Withdrawal Pending transaction 100.00 "
-                    "Quota Rs 100 Balance Rs 236"
+                    "Quota Rs 100.00 Balance Rs 236.00"
                 ),
-                "order-photo": "Order INR Locking 100 Quota 104 Balance 5",
+                "order-photo": (
+                    "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                    "Locking 22:58:41 Income Activity Quota Balance "
+                    "Feedback received waiting for processing Proceed"
+                ),
             }
             delays = {
                 "pending-photo-a": 0.02,
@@ -1239,17 +1280,53 @@ class BotTests(unittest.TestCase):
                 )
 
             async def download_image(message, _context):
-                return message.photo[-1].file_id.encode("utf-8")
+                file_id = message.photo[-1].file_id
+                return None if file_id == "unavailable" else file_id.encode("utf-8")
 
             async def transcript(message, _context, image_bytes=None):
                 values = {
                     "unclear": "",
+                    "unavailable": "",
                     "ambiguous": "Locking 100 Quota 100",
                     "unrelated": "Holiday photo at the beach",
-                    "order-a": "Order INR Locking 100 Quota 104 Balance 5",
-                    "withdrawal-a": "Withdrawal Locking 100 Quota -100 Balance 27",
-                    "order-b": "Order USDT Locking 25 Quota 26 Balance 2",
-                    "withdrawal-b": "Withdraw Locking Amount 40 Quota -40 Balance 6",
+                    "dashboard": (
+                        "Balance 2603.18 Total Earnings 1370.14 Total Withdrawal "
+                        "233493 Pending Locking 0 Common Functions Bonus Deposit "
+                        "Withdrawal Bill History Telegram Language Password"
+                    ),
+                    "profile": (
+                        "Profile Account UID Balance 3500.00 Services Telegram "
+                        "Language Password Secondary Password"
+                    ),
+                    "withdrawal-icon": (
+                        "Home Balance 2603.18 Common Functions Deposit "
+                        "Withdrawal Bill History Pending Locking"
+                    ),
+                    "blank-utr-incomplete": (
+                        "Transition Information Task ID 1 Order ID 2 UTR Locking"
+                    ),
+                    "populated-utr-incomplete": (
+                        "Transition Information Task ID 1 Order ID 2 "
+                        "UTR 220732002331 Locking"
+                    ),
+                    "order-a": (
+                        "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                        "Locking 22:58:41 Income Activity Quota Balance "
+                        "Feedback received waiting for processing Proceed"
+                    ),
+                    "withdrawal-a": (
+                        "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+                        "Locking 09:05:04 Quota Balance"
+                    ),
+                    "order-b": (
+                        "INR USDT 09/11/2026 - 15/11/2026 Locking "
+                        "22:58:41 Income Activity Quota Balance "
+                        "Feedback received waiting for processing Proceed"
+                    ),
+                    "withdrawal-b": (
+                        "Withdraw 08/11/2026 - 14/11/2026 Locking "
+                        "09:05:04 Quota Balance"
+                    ),
                 }
                 await asyncio.sleep(0)
                 return values[message.photo[-1].file_id]
@@ -1263,12 +1340,22 @@ class BotTests(unittest.TestCase):
                 ambiguous = make_update(28, 1, "ambiguous")
                 unrelated = make_update(22, 1, "unrelated")
                 await bot.group_screenshot_handler(unclear, context)
-                self.assertEqual(context.bot.send_message.await_count, 1)
-                self.assertIn("read this image", context.bot.send_message.await_args.kwargs["text"])
+                await bot.group_screenshot_handler(
+                    make_update(29, 1, "unavailable"), context
+                )
                 await bot.group_screenshot_handler(ambiguous, context)
-                self.assertEqual(context.bot.send_message.await_count, 1)
                 await bot.group_screenshot_handler(unrelated, context)
-                self.assertEqual(context.bot.send_message.await_count, 1)
+                for file_id in (
+                    "dashboard",
+                    "profile",
+                    "withdrawal-icon",
+                    "blank-utr-incomplete",
+                    "populated-utr-incomplete",
+                ):
+                    await bot.group_screenshot_handler(
+                        make_update(30 + len(file_id), 1, file_id), context
+                    )
+                self.assertEqual(context.bot.send_message.await_count, 0)
 
                 uploads = [
                     make_update(23, 2, "order-a"),
@@ -1287,12 +1374,12 @@ class BotTests(unittest.TestCase):
                     bot.group_screenshot_handler(update, context)
                     for update in duplicate_uploads
                 ])
-                self.assertEqual(context.bot.send_message.await_count, 6)
+                self.assertEqual(context.bot.send_message.await_count, 5)
                 reply_ids = {
                     call.kwargs["reply_to_message_id"]
                     for call in context.bot.send_message.await_args_list
                 }
-                self.assertEqual(reply_ids, {21, 23, 24, 25, 26, 27})
+                self.assertEqual(reply_ids, {23, 24, 25, 26, 27})
 
         with patch.object(bot, "DB_PATH", self.root / "concurrent-screenshots.sqlite3"):
             asyncio.run(scenario())
@@ -1328,7 +1415,10 @@ class BotTests(unittest.TestCase):
                 effective_user=SimpleNamespace(id=8),
             )
             ocr = AsyncMock(
-                return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                return_value=(
+                    "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+                    "Locking 09:05:04 Quota Balance"
+                )
             )
             with patch.object(
                 bot,
@@ -1359,15 +1449,19 @@ class BotTests(unittest.TestCase):
     def test_screenshot_duplicate_protection_covers_all_categories_across_groups(self):
         categories = (
             (
-                "Order INR Locking 100 Quota 104 Balance 5",
+                "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                "Locking 22:58:41 Income Activity Quota Balance "
+                "Feedback received waiting for processing Proceed",
                 bot.ORDER_IMAGE_REPLIES,
             ),
             (
-                "Withdrawal Locking 100 Quota -100 Balance 27",
+                "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+                "Locking 09:05:04 Quota Balance",
                 bot.WITHDRAWAL_IMAGE_REPLIES,
             ),
             (
-                "Withdrawal Pending transaction 100 Quota 100 Balance 27",
+                "Withdrawal Pending transaction 100.00 Quota 100.00 "
+                "Balance 27.00",
                 bot.WITHDRAWAL_PENDING_IMAGE_REPLIES,
             ),
         )
@@ -1488,7 +1582,11 @@ class BotTests(unittest.TestCase):
             for index in range(5)
         ]
         ocr = AsyncMock(
-            return_value="Order Locking 100 Quota 104 Balance 5"
+            return_value=(
+                "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                "Locking 22:58:41 Income Activity Quota Balance "
+                "Feedback received waiting for processing Proceed"
+            )
         )
 
         async def scenario():
@@ -1664,7 +1762,10 @@ class BotTests(unittest.TestCase):
                 bot,
                 "_read_screenshot_text",
                 new=AsyncMock(
-                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                    return_value=(
+                        "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+                        "Locking 09:05:04 Quota Balance"
+                    )
                 ),
             ),
             patch.object(bot, "_claim_screenshot_image_cooldown", return_value=True),
@@ -1705,7 +1806,10 @@ class BotTests(unittest.TestCase):
                 bot,
                 "_read_screenshot_text",
                 new=AsyncMock(
-                    return_value="Withdrawal Locking 100 Quota -100 Balance 27"
+                    return_value=(
+                        "Withdrawal 08/11/2026 - 14/11/2026 Locking "
+                        "Locking 09:05:04 Quota Balance"
+                    )
                 ),
             ),
             patch.object(bot, "_claim_screenshot_image_cooldown", return_value=True),
@@ -1750,7 +1854,13 @@ class BotTests(unittest.TestCase):
         ), patch.object(
             bot,
             "_read_screenshot_text",
-            new=AsyncMock(return_value="Order INR Locking 100 Quota 104 Balance 5"),
+            new=AsyncMock(
+                return_value=(
+                    "Order INR USDT 09/11/2026 - 15/11/2026 Locking "
+                    "Locking 22:58:41 Income Activity Quota Balance "
+                    "Feedback received waiting for processing Proceed"
+                )
+            ),
         ), patch.object(
             bot.random,
             "choice",

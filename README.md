@@ -17,7 +17,12 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    ```
 
    Automatic private-chat and group screenshot replies start with local OCR.
-   Ordinary dashboard/menu screenshots do not qualify for a locking response.
+   Dashboard/profile/menu screenshots, unreadable images, and uncertain
+   classifications are ignored without an automatic reply. Locking replies
+   require a supported transaction-page layout: category-specific Transition
+   Information fields or date/status filters with transaction-record labels.
+   Isolated navigation labels, summary totals, monetary values, and status
+   words do not qualify.
    When local OCR finds a high-evidence locking/pending candidate and a Gemini
    client is configured, the resized screenshot is sent to Gemini Vision for
    structured confirmation. A mismatch or invalid response results in no locking
