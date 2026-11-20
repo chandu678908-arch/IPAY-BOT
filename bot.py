@@ -2042,6 +2042,37 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
     normalized = _normalize_transition_information_ocr(normalized)
     has_populated_utr = _has_populated_transition_utr(normalized)
     has_transition_heading = _is_transition_information_layout(normalized)
+    has_lock_status = bool(re.search(r"\b(?:locked|locking)\b", normalized))
+    order_field_signals = sum(
+        bool(re.search(pattern, normalized))
+        for pattern in (
+            r"\bpayer\s+vpa\b",
+            r"\bpayer\s+card\s+id\b",
+            r"\bpayee\s+account\b",
+            r"\bpayee\s+name\b",
+            r"\bpayee\s+ifsc\b",
+            r"\bamount\b",
+        )
+    )
+    withdrawal_field_signals = sum(
+        bool(re.search(pattern, normalized))
+        for pattern in (
+            r"(?<!pay via )\bbank\s+name\b",
+            r"\bpayee\s+vpa\b",
+            r"\bpayee\s+card\s+id\b",
+            r"\border\s+amt\b",
+            r"\bactual\s+amt\b",
+            r"\breceived\b",
+        )
+    )
+    if has_transition_heading and has_lock_status:
+        # Telegram photo compression and Render's lower-CPU Tesseract build can
+        # drop individual field labels. Keep UTR as the user's primary signal,
+        # and require category-specific fields to protect unrelated screens.
+        if has_populated_utr and order_field_signals >= 1:
+            return "order"
+        if not has_populated_utr and withdrawal_field_signals >= 2:
+            return "withdrawal"
     if not has_transition_heading:
         # Do not let a regular task-payment screen become a transition-lock
         # classification just because OCR found generic locking words. When
@@ -2964,12 +2995,14 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             message.message_id,
         )
         return
-    strict_transition_category = _classify_transition_information_lock(ocr_text)
-    strict_transition_match = strict_transition_category == category
+    strict_locked_match = (
+        category in {"order", "withdrawal"}
+        and _classify_locked_screenshot(ocr_text) == category
+    )
     gemini_client = context.application.bot_data.get("gemini_client")
-    if gemini_client and strict_transition_match:
+    if gemini_client and strict_locked_match:
         log.info(
-            "Using strict Transition Information OCR classification without "
+            "Using strict locked-transaction OCR classification without "
             "Gemini override (chat_id=%s, message_id=%s, category=%s)",
             chat.id,
             message.message_id,

@@ -1822,7 +1822,7 @@ class BotTests(unittest.TestCase):
             "◆ THANK YOU FOR YOUR COOPERATION!",
         )
 
-    def test_screenshot_handler_sends_no_template_when_gemini_disagrees(self):
+    def test_strict_locked_ocr_cannot_be_vetoed_by_gemini(self):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"gemini_client": object()}),
             bot=SimpleNamespace(send_message=AsyncMock()),
@@ -1863,51 +1863,7 @@ class BotTests(unittest.TestCase):
         ):
             asyncio.run(bot.group_screenshot_handler(update, context))
 
-        confirm.assert_awaited_once()
-        context.bot.send_message.assert_not_awaited()
-
-    def test_screenshot_reply_falls_back_to_strict_ocr_when_gemini_is_unavailable(self):
-        context = SimpleNamespace(
-            application=SimpleNamespace(bot_data={"gemini_client": object()}),
-            bot=SimpleNamespace(send_message=AsyncMock()),
-        )
-        message = SimpleNamespace(
-            message_id=949,
-            photo=[SimpleNamespace(file_id="candidate-image")],
-            document=None,
-        )
-        update = SimpleNamespace(
-            effective_message=message,
-            effective_chat=SimpleNamespace(id=-949, type="supergroup"),
-            effective_user=SimpleNamespace(id=951),
-        )
-        with (
-            patch.object(bot, "DB_PATH", self.root / "gemini-outage.sqlite3"),
-            patch.object(
-                bot,
-                "_download_screenshot_bytes",
-                new=AsyncMock(return_value=b"candidate-image-bytes"),
-            ),
-            patch.object(
-                bot,
-                "_read_screenshot_text",
-                new=AsyncMock(
-                    return_value=(
-                        "Withdrawal 08/11/2026 - 14/11/2026 Locking "
-                        "Locking 09:05:04 Quota Balance"
-                    )
-                ),
-            ),
-            patch.object(bot, "_claim_screenshot_image_cooldown", return_value=True),
-            patch.object(
-                bot,
-                "_gemini_confirms_screenshot_category",
-                new=AsyncMock(return_value=None),
-            ) as confirm,
-        ):
-            asyncio.run(bot.group_screenshot_handler(update, context))
-
-        confirm.assert_awaited_once()
+        confirm.assert_not_awaited()
         context.bot.send_message.assert_awaited_once()
         self.assertIn(
             context.bot.send_message.await_args.kwargs["text"],
