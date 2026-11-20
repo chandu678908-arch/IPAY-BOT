@@ -237,6 +237,21 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             bot._classify_screenshot(withdrawal_transition), "withdrawal"
         )
+        # The Render photo OCR can omit several field labels after Telegram
+        # compression. UTR remains decisive when a category-specific field
+        # and the visible Transition Information locking status survive OCR.
+        sparse_order_transition = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Payer VPA wallet@upi Locking"
+        )
+        sparse_withdrawal_transition = (
+            "Transition Information Task ID pi_722316179 Order ID 6AFAEE210002 "
+            "UTR Bank Name paytm Received -5000 INR Locking"
+        )
+        self.assertEqual(bot._classify_screenshot(sparse_order_transition), "order")
+        self.assertEqual(
+            bot._classify_screenshot(sparse_withdrawal_transition), "withdrawal"
+        )
         self.assertIsNone(
             bot._classify_screenshot(
                 order_transition.replace("UTR 631922777297", "UTR")
