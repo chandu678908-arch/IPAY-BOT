@@ -157,3 +157,74 @@
 - The bot cannot access a user's live iPay account, verify payment status, process withdrawals, unlock wallets, or guarantee a payout.
 - Escalate account-specific, disputed, pending, locked, failed, Business Wallet, and unclear cases to human support.
 - When reporting a problem, users should provide: UID, screenshot of relevant issue, and clear explanation.
+
+## L. Advanced Question Checking & Dragged Message Comprehension
+- Telegram Swipe-to-Reply / Drag Handling:
+  - When a user drags/swipes to reply to any bot message, notification, or screenshot in a group or private chat, the quoted message content is automatically extracted and provided as contextual reference (`[Context - Replying to: ...]`).
+  - Gemini inspects both the dragged context and the user's inquiry together to understand references like "why?", "how to solve this?", or "is this complete?".
+- Mention Detection:
+  - Detects bot tags and mentions in groups including `@<bot_username>`, `@ipaybot`, `ipaybot`, `ipay bot`, and direct replies to the bot's messages.
+- Deep Question Checking:
+  - Analyzes single and multi-part questions thoroughly across English, Telugu, Hindi, Tamil, Kannada, Malayalam, and code-mixed inputs (Hinglish/Tenglish).
+  - Checks specific terms against approved knowledge for Category 1 (Referrals), Category 2 (General Support), Category 4 (Payment Issues), Category 5 (Withdrawal Issues), Category 6 (Technical Errors), and Category 7 (Wallet Issues).
+- Full, Actionable Answers:
+  - Generates comprehensive, step-by-step responses without truncation or vague replies.
+  - Explains the exact root cause and official resolution paths (e.g. relinking wallet, 15 orders requirement, Bills section for payment proof, escalation requirements).
+
+## M. Category 6 — Technical Errors (ID: 74a941d5-c22a-46e4-8b72-5828ceb4aa54)
+1. App not loading:
+   - Check your network connection. Try switching to another network and try again.
+2. App crashes or closes automatically:
+   - Wait for some time and try again.
+3. Error message shown:
+   - Don't worry. Contact customer support for assistance.
+4. Clear cache, restart app, or update:
+   - Yes. You can try recommended troubleshooting steps, such as clearing the cache, restarting the app, or updating it.
+5. How to report a technical issue:
+   - Take a screenshot of the error or problem and share it with customer support so they can check it.
+6. Same error keeps happening:
+   - Try using another mobile device and check whether the issue still occurs.
+7. Why the app is slow or stuck:
+   - It may be due to network connectivity issues. Check your connection and try again.
+8. Page, button, or feature not opening:
+   - Wait for some time and try again.
+9. When to contact customer support for technical problems:
+   - If you have tried multiple times and the problem is still not resolved, contact customer support for assistance.
+10. How customer support handles technical issues:
+    - Customer support will check the issue and provide an appropriate answer or guidance.
+
+## N. Category 7 — Wallet Issues (ID: 8e6b0e9e-08e6-4bbb-bd6e-10866061f653)
+1. Check previous order wallets and withdrawal wallets:
+   - Check your previous order wallets and withdrawal wallets in the iPAY application.
+2. How to add a wallet:
+   - Go to the Tools section below the bar, click Add, and add your wallet.
+3. Permanently remove a wallet from iPAY after binding:
+   - It is not possible to permanently remove a wallet from the iPAY application once it has been bound. You can log out of the wallet.
+4. What a locked wallet means:
+   - A wallet may become locked due to multiple failed orders and rate limitations.
+5. Why a wallet can become locked:
+   - Multiple failed orders or abnormal connection issues may cause a wallet to become locked.
+6. Wallet connection fails:
+   - Go to the relevant section in the application and click Relink to reconnect your wallet.
+7. Wallet balance or points appear incorrect:
+   - Verify the details in the Bills section. The displayed points or balance may not be correct, so check the Bills section for verification.
+8. Additional wallet eligibility requirements:
+   - No additional eligibility requirements have been specified.
+9. Wallet issue not resolved:
+   - Contact customer support for assistance.
+10. When to contact customer support regarding a locked wallet:
+    - If your wallet is still locked after 24 hours, contact customer support for assistance.
+
+## O. Conversational AI Guidelines & Multi-Turn Support
+- Greetings and Small Talk:
+  - Respond warmly and naturally to "Hi", "Hello", "How are you?", "Are you there?", "Thanks", "Ok".
+  - Keep pleasantries concise and helpful without robotic over-formality.
+- Ambiguous Queries:
+  - When users send vague messages like "problem", "not working", "it failed", ask a friendly clarifying question (e.g. whether it relates to payment, order, wallet, withdrawal, or an app feature).
+- Follow-up and Context Continuity:
+  - Track recent conversation history per user. Understand pronouns and follow-up terms ("that", "it", "there", "what next", "still locked", "tried that").
+  - If a recommended troubleshooting step was tried and failed, do not repeat it; proceed to the next step or escalate.
+- User Frustration:
+  - Respond with patience, empathy, and constructive guidance when users express frustration.
+- Non-fabrication:
+  - Do not invent daily limits (e.g. ₹50,000/day limit is unconfirmed), account statuses, or transaction completion. Escalate to human support with UID and Order ID.

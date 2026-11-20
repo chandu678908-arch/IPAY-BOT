@@ -64,6 +64,17 @@ TOPIC_TERMS = {
     "points": {"withdrawal", "maximum", "limit"},
     "cancel": {"cancellation", "withdrawal", "support"},
     "cancellation": {"cancel", "withdrawal", "support"},
+    "crash": {"technical", "app", "error"},
+    "crashes": {"technical", "app", "error"},
+    "loading": {"technical", "app", "network"},
+    "cache": {"technical", "app", "restart"},
+    "restart": {"technical", "app", "cache"},
+    "slow": {"technical", "network", "app"},
+    "stuck": {"technical", "pending", "app", "network"},
+    "technical": {"error", "app", "support"},
+    "tools": {"wallet", "add"},
+    "add": {"wallet", "tools"},
+    "remove": {"wallet", "logout"},
 }
 
 # Lightweight multilingual query expansion keeps PDF retrieval useful without
@@ -87,6 +98,8 @@ MULTILINGUAL_TERMS = {
     "दोस्त": {"friend", "invite", "referral"}, "मित्र": {"friend", "invite", "referral"},
     "टीम": {"team", "referral", "invite"}, "सपोर्ट": {"support", "admin", "contact", "help"},
     "मदद": {"support", "help", "admin", "contact"}, "एडमिन": {"admin", "support", "contact"},
+    "क्रैश": {"crash", "technical", "app"}, "धीमा": {"slow", "app", "network"},
+    "एरर": {"error", "technical", "support"},
     # Telugu
     "ఉపసంహరణ": {"withdrawal", "withdraw"}, "డబ్బు": {"payment", "withdrawal"},
     "చెల్లింపు": {"payment", "deposit"}, "జమ": {"deposit", "payment"},
@@ -109,6 +122,12 @@ MULTILINGUAL_TERMS = {
     "కానీ": {"status", "pending"},
     "చేయాలి": {"how", "resolve", "relink"},
     "బ్యాలెన్స్": {"balance", "payment", "receiving"},
+    "క్రాష్": {"crash", "technical", "app"},
+    "ఓపెన్": {"open", "app", "loading"},
+    "హ్యాంగ్": {"hang", "stuck", "technical", "app"},
+    "ఎర్రర్": {"error", "technical", "support"},
+    "రీలింక్": {"relink", "wallet", "locked"},
+    "టూల్స్": {"tools", "wallet", "add"},
     # Tamil
     "திரும்பப்": {"withdrawal", "withdraw"}, "பணம்": {"payment", "withdrawal"},
     "வைப்பு": {"deposit", "payment"}, "கட்டணம்": {"payment", "deposit"},

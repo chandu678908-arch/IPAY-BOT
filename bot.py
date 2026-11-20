@@ -107,7 +107,7 @@ SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD = min(
 AI_ENABLED = os.getenv("AI_ENABLED", "true").strip().casefold() not in {
     "0", "false", "no", "off",
 }
-AI_MAX_OUTPUT_TOKENS = max(1, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "300")))
+AI_MAX_OUTPUT_TOKENS = max(1, int(os.getenv("AI_MAX_OUTPUT_TOKENS", "700")))
 AI_TIMEOUT_SECONDS = max(1.0, float(os.getenv("AI_TIMEOUT_SECONDS", "45")))
 SCREENSHOT_VISION_TIMEOUT_SECONDS = max(
     1.0, float(os.getenv("SCREENSHOT_VISION_TIMEOUT_SECONDS", "8"))
@@ -516,6 +516,117 @@ When a user reports a withdrawal problem, ask for relevant details such as:
 Do not request passwords, OTPs, UPI PINs or sensitive authentication details.
 
 ==================================================
+CATEGORY 6 — TECHNICAL ERRORS (OFFICIAL KNOWLEDGE)
+Category ID: 74a941d5-c22a-46e4-8b72-5828ceb4aa54
+Category Name: technical_error
+==================================================
+1. APP NOT LOADING:
+Check your network connection. Try switching to another network and try again.
+
+2. APP CRASHES OR CLOSES AUTOMATICALLY:
+Wait for some time and try again.
+
+3. ERROR MESSAGE SHOWN:
+Don't worry. Contact customer support for assistance.
+
+4. CLEAR CACHE, RESTART APP, OR UPDATE:
+Yes. You can try recommended troubleshooting steps, such as clearing the cache, restarting the app, or updating it.
+
+5. HOW TO REPORT A TECHNICAL ISSUE:
+Take a screenshot of the error or problem and share it with customer support so they can check it.
+
+6. SAME ERROR KEEPS HAPPENING:
+Try using another mobile device and check whether the issue still occurs.
+
+7. WHY THE APP IS SLOW OR STUCK:
+It may be due to network connectivity issues. Check your connection and try again.
+
+8. PAGE, BUTTON, OR FEATURE NOT OPENING:
+Wait for some time and try again.
+
+9. WHEN TO CONTACT CUSTOMER SUPPORT FOR TECHNICAL PROBLEMS:
+If you have tried multiple times and the problem is still not resolved, contact customer support for assistance.
+
+10. HOW CUSTOMER SUPPORT HANDLES TECHNICAL ISSUES:
+Customer support will check the issue and provide an appropriate answer or guidance.
+
+==================================================
+CATEGORY 7 — WALLET ISSUES (OFFICIAL KNOWLEDGE)
+Category ID: 8e6b0e9e-08e6-4bbb-bd6e-10866061f653
+Category Name: wallet
+==================================================
+1. CHECK PREVIOUS ORDER WALLETS AND WITHDRAWAL WALLETS:
+Check your previous order wallets and withdrawal wallets in the iPAY application.
+
+2. HOW TO ADD A WALLET:
+Go to the Tools section below the bar, click Add, and add your wallet.
+
+3. PERMANENTLY REMOVE A WALLET FROM IPAY:
+It is not possible to permanently remove a wallet from the iPAY application once it has been bound. You can log out of the wallet.
+
+4. WHAT A LOCKED WALLET MEANS:
+A wallet may become locked due to multiple failed orders and rate limitations.
+
+5. WHY A WALLET CAN BECOME LOCKED:
+Multiple failed orders or abnormal connection issues may cause a wallet to become locked.
+
+6. WALLET CONNECTION FAILS:
+Go to the relevant section in the application and click Relink to reconnect your wallet.
+
+7. WALLET BALANCE OR POINTS APPEAR INCORRECT:
+Verify the details in the Bills section. The displayed points or balance may not be correct, so check the Bills section for verification.
+
+8. ADDITIONAL WALLET ELIGIBILITY REQUIREMENTS:
+No additional eligibility requirements have been specified.
+
+9. WALLET ISSUE NOT RESOLVED:
+Contact customer support for assistance.
+
+10. WHEN TO CONTACT CUSTOMER SUPPORT REGARDING A LOCKED WALLET:
+If your wallet is still locked after 24 hours, contact customer support for assistance.
+
+==================================================
+CONVERSATIONAL AI & MULTI-TURN RULES
+==================================================
+1. GREETINGS & CASUAL INTERACTION:
+- When a user greets ("Hi", "Hello", "Hey buddy", "Good morning"), respond warmly:
+  "Hello! Welcome to iPAY support. How can I help you today?"
+- When a user asks "How are you?":
+  "I'm doing well, thank you! I'm here and ready to help you with any iPAY questions."
+- When a user asks "Are you there?":
+  "Yes, I'm here! Tell me what you need help with."
+- When a user says "Thanks" or "Thank you":
+  "You're welcome! Let me know if you need any more help."
+- When a user says "Ok" or "Alright":
+  "Alright! If you have any questions, feel free to ask."
+Keep greeting and polite acknowledgment replies concise and natural.
+
+2. AMBIGUOUS OR VAGUE QUESTIONS:
+When a user sends an unclear message like "problem", "not working", "it failed", "issue", or "help", do not ignore it. Ask a polite clarifying question:
+"I'm here to help. What isn't working exactly? Is it related to payment, order, wallet connection, withdrawal, or an app feature?"
+
+3. CONTEXT CONTINUITY & FOLLOW-UP SUPPORT:
+- Track recent conversation history. Understand pronouns and follow-up terms ("that", "it", "there", "what next", "where can I find it", "same problem").
+- If a user says "I tried that", "still not working", or "same problem again" after following suggested steps:
+  * Do NOT repeat the exact same troubleshooting step.
+  * Acknowledge that the step did not resolve the problem.
+  * Progress to the next approved step or advise contacting Customer Support with their UID, Order ID, and a screenshot.
+
+4. USER FRUSTRATION & PATIENCE:
+If a user is frustrated ("Your bot is useless", "Nothing works"), respond with empathy and calm assistance:
+"I'm sorry you're experiencing this issue. Please tell me exactly what is not working or share a screenshot so I can guide you. If the issue continues, Customer Support can check it directly."
+Never argue with the user or become defensive.
+
+5. STRICT NON-FABRICATION & UNCONFIRMED QUESTIONS:
+- If a user asks about unconfirmed limits (e.g. "Can I withdraw ₹50,000 per day?"):
+  "I don't have confirmed information about the daily withdrawal limit. Please contact customer support to verify it."
+- If a user asks "Why exactly was my account restricted?":
+  "I cannot check your individual account status from here. Please contact customer support with your UID so they can review your account."
+- If a user asks "Can you check my transaction?":
+  "I cannot directly access your transaction details. Please share your Order ID with customer support so they can check it."
+- Never claim to have accessed a user's account, processed a payment, or unlocked a wallet.
+
+==================================================
 MULTILINGUAL AI REQUIREMENTS & CODE-MIXING
 ==================================================
 Users can ask questions in different languages: English, Telugu, Hindi, Tamil,
@@ -560,6 +671,45 @@ The AI must:
 11. Ask clarification questions when the user's meaning is unclear.
 12. Never make up iPAY policies, rewards, amounts, fees, processing times, or eligibility rules.
 13. If the user asks about an unknown or account-specific matter, politely guide them to human support.
+
+==================================================
+ADVANCED QUESTION CHECKING & THOROUGH COMPLETE ANSWERS
+==================================================
+1. COMPREHENSIVE QUESTION CHECKING:
+   - When a user asks a question, thoroughly examine and check every element of their message:
+     * Quoted / Dragged Context: If a message begins with "[Context - Replying to: ...]" or quotes
+       a previous bot message/screenshot/text, analyze the quoted text to understand what "this",
+       "why", "how to solve", or "status" refers to.
+     * Core Intent: Pinpoint whether the question relates to referrals, general support,
+       payment/deposit, withdrawals, or guide FAQs.
+     * Multi-Part Queries: If the user asks more than one thing (e.g. "What is minimum withdrawal
+       and how long does it take?", "How to invite and when will I get ₹50?"), identify each
+       individual question and answer every single part in sequence.
+     * Nuance & Specific Conditions: Pay attention to specific details like "15 orders", "₹100",
+       "₹50", "UID", "Bills section", "Pending", "Locked", etc.
+     * Language & Transliteration: Accurately parse misspellings, colloquial expressions, code-mixed
+       sentences (Hinglish/Tenglish), and typos without confusion.
+
+2. PROVIDING FULL, COMPLETE, AND ACTIONABLE ANSWERS:
+   - Never provide half-answers, abrupt truncated notes, or vague one-sentence brush-offs.
+   - Always give complete, step-by-step guidance:
+     * For Referral Invites: Give the exact in-app path (iPAY App → Team section → copy and share referral link).
+     * For Referral Rewards: Explain both amounts (₹100 for referred user, ₹50 for referrer), the condition
+       (invited user must complete 15 orders after registration), and that it credits automatically.
+     * For Missing Referral Rewards: Give the path (iPAY App → Assets → Bonus → Referral Banner → View Detail)
+       where they can check details and claim if applicable.
+     * For Locked Withdrawals/Orders: Explain the cause (unstable connection or logging out during a transaction)
+       AND the exact resolution step (relink wallet in the app so the system processes the order).
+     * For Withdrawal Pending: Explain that an order is currently being processed and pending payment from another
+       user, taking approximately 10–15 minutes.
+     * For Payment Deducted but Not Credited: Direct the user to check their payment app status
+       (Pending/Failed/Successful). If Pending, advise contacting bank/payment provider. If Successful,
+       advise contacting Customer Support with payment screenshot and order details.
+     * For Missing Payment Proof: Guide them to the Bills section in the iPAY app.
+     * For Human Support Escalation: Provide the exact details required (UID, Order ID, screenshot of issue,
+       clear explanation) and note 24/7 availability with 3–5 minute usual response time. Never ask for
+       passwords, OTPs, or UPI PINs.
+   - Always ensure the answer resolves the user's inquiry from start to finish.
 
 ==================================================
 SCREENSHOT CLASSIFICATION RULES
@@ -1768,22 +1918,41 @@ def _is_group_message_for_bot(message, bot) -> bool:
     reply = getattr(message, "reply_to_message", None)
     sender = getattr(reply, "from_user", None)
     bot_id = getattr(bot, "id", None)
-    if sender and bot_id is not None and getattr(sender, "id", None) == bot_id:
-        return True
+    bot_username = getattr(bot, "username", None)
 
-    username = getattr(bot, "username", None)
-    if not username:
-        return False
-    expected_mention = f"@{username}".casefold()
+    # 1. User dragged / replied to a message from the bot
+    if sender:
+        if bot_id is not None and getattr(sender, "id", None) == bot_id:
+            return True
+        if bot_username and getattr(sender, "username", None):
+            if sender.username.casefold() == bot_username.casefold():
+                return True
+        if getattr(sender, "is_bot", False):
+            sender_name = (getattr(sender, "username", "") or getattr(sender, "first_name", "")).casefold()
+            if "ipay" in sender_name:
+                return True
+
     text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
-    if expected_mention in text.casefold():
+    text_lower = text.casefold()
+
+    # 2. Direct @mention of bot username
+    if bot_username:
+        expected_mention = f"@{bot_username}".casefold()
+        if expected_mention in text_lower:
+            return True
+
+    # 3. Direct mention or tag of ipaybot, @ipaybot, ipay bot, ipay_bot
+    if re.search(r"@?\bipay(?:_?bot)?\b", text_lower):
         return True
 
+    # 4. Telegram mention entity check
     entities = getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []
     for entity in entities:
         if getattr(entity, "type", None) == "mention":
             val = _extract_entity_text(message, entity).strip().casefold()
-            if val == expected_mention:
+            if bot_username and val == f"@{bot_username}".casefold():
+                return True
+            if val in {"@ipaybot", "@ipay_bot", "@ipay"}:
                 return True
     return False
 
@@ -4606,7 +4775,13 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     args = getattr(context, "args", []) or []
     question = " ".join(args).strip()
-    if not question:
+
+    reply = getattr(message, "reply_to_message", None)
+    replied_text = ""
+    if reply:
+        replied_text = (getattr(reply, "text", None) or getattr(reply, "caption", None) or "").strip()
+
+    if not question and not replied_text:
         await message.reply_text(
             f"{ICON_MESSAGE} Ask Command Usage\n\n"
             "Ask any question about iPay, wallets, or withdrawals:\n"
@@ -4615,6 +4790,12 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             parse_mode="Markdown",
         )
         return
+
+    if replied_text:
+        if question:
+            question = f"[Context - Replying to: \"{replied_text[:500]}\"]\nUser Question: {question}"
+        else:
+            question = f"[Context - Replying to: \"{replied_text[:500]}\"]\nPlease explain this and help me."
 
     question = question[:2000]
 
@@ -5789,7 +5970,7 @@ async def _ai_answer(
             "and say that language is currently unavailable."
         )
     history = await asyncio.to_thread(get_history, chat_id)
-    history = history[-6:]
+    history = history[-12:]
     if gemini_client is not None:
         try:
             answer = await _gemini_answer(
@@ -5816,6 +5997,54 @@ async def _ai_answer(
 def _ai_unavailable_answer(question: str, guide: Guide) -> str:
     """Give useful local guidance when the answer provider is unavailable."""
     normalized = question.casefold()
+    clean_q = re.sub(r"[^\w\s]", "", normalized).strip()
+
+    # Casual small talk / greetings fallback
+    if clean_q in {"how are you", "how r u", "kya haal hai", "ela unnaru"}:
+        return "I'm doing well, thank you! I'm here and ready to help you with any iPAY questions."
+    if clean_q in {"are you there", "there", "u there", "unnava", "hai kya"}:
+        return "Yes, I'm here! Tell me what you need help with."
+    if clean_q in {"thanks", "thank you", "thx", "dhanyavadalu", "shukriya"}:
+        return "You're welcome! Let me know if you need any more help."
+    if clean_q in {"ok", "okay", "alright", "sare", "theek hai"}:
+        return "Alright! If you have any questions, feel free to ask."
+
+    # Ambiguous messages fallback
+    if clean_q in {"problem", "not working", "it failed", "issue", "help", "help me", "failed"}:
+        return "I'm here to help. What isn't working exactly? Is it related to payment, order, wallet connection, withdrawal, or an app feature?"
+
+    # Troubleshooting follow-up fallback
+    if re.search(r"\b(still\s+not\s+working|tried\s+that|same\s+problem|again|malli\s+same|wapas\s+wahi)\b", normalized):
+        return (
+            f"{ICON_PIN} If the recommended troubleshooting steps did not resolve the problem, please contact Customer Support.\n\n"
+            f"{ICON_ARROW} Provide your UID, Order ID, and a screenshot of the issue so an admin can investigate."
+        )
+
+    # Category 6 — Technical errors
+    if re.search(r"\b(crash(?:es|ed|ing)?|not\s+loading|load(?:ing)?\s+problem|app\s+stuck|app\s+slow|error\s+message|clear\s+cache|restart|button\s+not\s+(?:working|opening)|feature\s+not\s+opening|open\s+avvatledu|hang\s+avtundi|band\s+avuthundi|error\s+vastundi|क्रैश|धीमा|लोड\s+नहीं)\b", normalized):
+        return (
+            f"{ICON_PIN} I can't reach the answer service right now, but here is technical troubleshooting guidance:\n\n"
+            f"{ICON_CHECK} App not loading / slow / stuck: Check your network connection. Try switching to another network and try again.\n"
+            f"{ICON_CHECK} App crashes / closes / button not opening: Wait for some time and try again.\n"
+            f"{ICON_CHECK} Recommended troubleshooting: Try clearing cache, restarting the app, or updating it.\n"
+            f"{ICON_CHECK} Repeated errors: Try using another mobile device.\n"
+            f"{ICON_ARROW} If tried multiple times and unresolved, take a screenshot and contact Customer Support."
+        )
+
+    # Category 7 — Wallet issues
+    if re.search(r"\b(wallet\s+lock(?:ed)?|add\s+wallet|remove\s+wallet|delete\s+wallet|relink\s+wallet|connection\s+fail(?:ed)?|balance\s+wrong|points\s+not\s+showing|points\s+incorrect|24\s+hours|tools\s+section|వాలెట్|वॉलेट)\b", normalized):
+        return (
+            f"{ICON_PIN} I can't reach the answer service right now, but here is wallet troubleshooting guidance:\n\n"
+            f"{ICON_CHECK} Check previous wallets: Check previous order and withdrawal wallets in the iPAY application.\n"
+            f"{ICON_CHECK} How to add wallet: Go to Tools section below the bar, click Add, and add your wallet.\n"
+            f"{ICON_CHECK} Remove wallet: It is not possible to permanently remove a bound wallet; you can log out.\n"
+            f"{ICON_CHECK} Locked wallet: Caused by multiple failed orders, rate limitations, or abnormal connection.\n"
+            f"{ICON_CHECK} Connection failed: Go to the relevant section in the app and click Relink to reconnect.\n"
+            f"{ICON_CHECK} Balance / points incorrect: Check the Bills section for verification.\n"
+            f"{ICON_ARROW} If wallet remains locked after 24 hours or issue is unresolved, contact Customer Support."
+        )
+
+    # Category 5 — Withdrawal problems
     if re.search(r"\b(withdraw(?:al|als)?|payout|cash[ -]?out|minimum\s+withdraw|order\s+lock|avvatledu)\b", normalized):
         return (
             f"{ICON_PIN} I can't reach the answer service right now, but here are the withdrawal guidelines:\n\n"
@@ -5924,6 +6153,14 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await handle_uid_notice(update, extracted_uid)
             return
 
+    reply = getattr(message, "reply_to_message", None)
+    replied_text = ""
+    replied_context = ""
+    if reply:
+        replied_text = (getattr(reply, "text", None) or getattr(reply, "caption", None) or "").strip()
+        if replied_text:
+            replied_context = f"[Context - Replying to: \"{replied_text[:500]}\"]\n"
+
     # Let clear iPay questions reach the bot without a mention. Other group
     # conversation remains ignored unless the user addresses or replies to us.
     guide: Guide = context.application.bot_data["guide"]
@@ -5934,7 +6171,8 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     pre_retrieved_pages = None
     if is_group and not addressed_to_bot:
-        pre_retrieved_pages = guide.retrieve(text, top_k=2)
+        retrieval_query = f"{replied_text} {text}".strip() if replied_text else text
+        pre_retrieved_pages = guide.retrieve(retrieval_query, top_k=2)
         if not pre_retrieved_pages:
             return
 
@@ -5956,10 +6194,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         processed[message_key] = now
         context.application.bot_data["processed_ai_messages"] = processed
 
-    # Keep these short menu prompts separate from ordinary support questions.
+    # Keep these short menu prompts separate from ordinary support questions unless replying to a message.
     clean_text = re.sub(r"@\w+", "", text).strip().lower()
     clean_norm = re.sub(r"[^\w\s]", "", clean_text).strip()
-    if clean_norm in {"", "help", "start", "/hii", "/hi"}:
+    if not replied_text and clean_norm in {"", "help", "start", "/hii", "/hi"}:
         if is_group:
             await message.reply_text("Please tell me what you need help with.")
             return
@@ -5994,7 +6232,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     last_message_at[rate_limit_key] = now
 
-    question = text[:2000]
+    if replied_context:
+        question = f"{replied_context}User Question: {text}"[:2000]
+    else:
+        question = text[:2000]
     if not question:
         return
     if _contains_sensitive_input(question):
@@ -6036,10 +6277,19 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         finally:
             await _stop_background_task(typing_task)
         await _async_add_conversation_turn(conversation_id, question, answer)
-        answer_with_support = (
-            answer
-            + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
-        )
+        norm_q = re.sub(r"[^\w\s]", "", question.strip().casefold())
+        is_casual = norm_q in {
+            "thanks", "thank you", "thx", "ok", "okay", "alright", "how are you",
+            "are you there", "good morning", "good evening", "hi", "hello",
+            "hey", "yes", "no", "cool", "fine"
+        }
+        if is_casual:
+            answer_with_support = answer
+        else:
+            answer_with_support = (
+                answer
+                + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
+            )
         if pages and pages[0].image_path:
             await _send_guide_page(message, pages[0])
         await message.reply_text(answer_with_support)
@@ -6059,10 +6309,20 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as exc:
         await _stop_background_task(locals().get("typing_task"))
         log.error("AI reply failed (%s)", type(exc).__name__)
-        fallback = (
-            _ai_unavailable_answer(question, guide)
-            + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
-        )
+        norm_q = re.sub(r"[^\w\s]", "", question.strip().casefold())
+        is_casual = norm_q in {
+            "thanks", "thank you", "thx", "ok", "okay", "alright", "how are you",
+            "are you there", "good morning", "good evening", "hi", "hello",
+            "hey", "yes", "no", "cool", "fine"
+        }
+        raw_fallback = _ai_unavailable_answer(question, guide)
+        if is_casual:
+            fallback = raw_fallback
+        else:
+            fallback = (
+                raw_fallback
+                + f"\n\n{ICON_MESSAGE} Need a human? Contact {SUPPORT_1}, {SUPPORT_2}, or {SUPPORT_3}."
+            )
         await message.reply_text(
             fallback,
             reply_markup=support_options_keyboard(),

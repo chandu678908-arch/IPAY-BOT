@@ -62,5 +62,21 @@
     "keywords": ["account", "password", "otp", "security", "access", "reset", "forgot"],
     "resolution": "ACCOUNT ACCESS\n\nCHECK THESE KEY POINTS\n- If signed in, use the password-change option in your account settings and follow the verification steps.\n- If you cannot sign in, contact support for account-recovery help.\n\nIMPORTANT\n- Never share your password, OTP, or PIN here.",
     "escalate": true
+  },
+
+  "technical_error": {
+    "category_id": "74a941d5-c22a-46e4-8b72-5828ceb4aa54",
+    "title": "Technical Errors & App Troubleshooting",
+    "keywords": ["app not loading", "crash", "crashes", "error message", "clear cache", "restart", "slow", "stuck", "button not working", "technical error"],
+    "resolution": "🛠️ iPAY – TECHNICAL TROUBLESHOOTING\n\n➡️ COMMON SOLUTIONS\n▪️ App not loading / slow / stuck: Check your network connection. Try switching to another network and try again.\n▪️ App crashes / closes automatically: Wait for some time and try again.\n▪️ Recommended troubleshooting: Clear the cache, restart the app, or update it.\n▪️ Feature/button not opening: Wait for some time and try again.\n▪️ Repeated errors: Try using another mobile device.\n\n📞 CUSTOMER SUPPORT\n▪️ Take a screenshot of the error or problem and share it with customer support.\n▪️ If unresolved after multiple attempts, contact customer support for guidance.",
+    "escalate": true
+  },
+
+  "wallet_issue": {
+    "category_id": "8e6b0e9e-08e6-4bbb-bd6e-10866061f653",
+    "title": "Wallet Management & Troubleshooting",
+    "keywords": ["wallet", "add wallet", "remove wallet", "relink", "wallet locked", "connection failed", "balance wrong", "points incorrect", "tools section", "24 hours"],
+    "resolution": "👛 iPAY – WALLET SUPPORT\n\n➡️ WALLET MANAGEMENT\n▪️ Add wallet: Go to Tools section below the bar, click Add, and add your wallet.\n▪️ Check wallets: Check previous order and withdrawal wallets in the iPAY application.\n▪️ Remove wallet: Cannot permanently remove a bound wallet from iPAY; you can log out of the wallet.\n\n🔄 CONNECTION & LOCK ISSUES\n▪️ Connection failed: Go to relevant section in the app and click Relink to reconnect.\n▪️ Locked wallet: Caused by multiple failed orders, rate limitations, or abnormal connection.\n▪️ Balance / points incorrect: Check the Bills section for verification.\n\n📞 ESCALATION\n▪️ If your wallet is still locked after 24 hours, contact customer support for assistance.",
+    "escalate": true
   }
 }

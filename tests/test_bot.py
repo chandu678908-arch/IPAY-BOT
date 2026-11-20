@@ -1945,6 +1945,17 @@ class BotTests(unittest.TestCase):
             self.root / "images",
         )
 
+    def make_gemini_client(self, text: str):
+        async def response_stream():
+            yield SimpleNamespace(text=text)
+
+        generate = AsyncMock(return_value=response_stream())
+        return SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+
     def test_default_guide_paths_are_anchored_to_the_project(self):
         for path, environment_key, default in (
             (bot.GUIDE_PDF_PATH, "GUIDE_PDF_PATH", "I_PAY_User_Guide.pdf"),
@@ -5718,6 +5729,249 @@ class BotTests(unittest.TestCase):
         self.assertIn("withdrawal guidelines", wth_text.lower())
         self.assertIn("₹100", wth_text)
         self.assertIn("relink your wallet", wth_text.lower())
+
+    def test_is_group_message_for_bot_advanced_detection(self):
+        """Tests that _is_group_message_for_bot recognizes drag-replies and various ipaybot mentions."""
+        bot_user = SimpleNamespace(id=777, username="ipaybot")
+
+        # 1. Swiping right / dragging to reply to a bot message
+        drag_reply = SimpleNamespace(
+            text="How do I solve this?",
+            reply_to_message=SimpleNamespace(
+                from_user=SimpleNamespace(id=777, is_bot=True, username="ipaybot"),
+                text="Order locked: relink your wallet in the iPAY app.",
+            ),
+        )
+        self.assertTrue(bot._is_group_message_for_bot(drag_reply, bot_user))
+
+        # 2. Drag-reply to another bot with ipay in username
+        drag_reply_alt = SimpleNamespace(
+            text="why?",
+            reply_to_message=SimpleNamespace(
+                from_user=SimpleNamespace(id=888, is_bot=True, username="ipay_support_bot"),
+                text="Withdrawal pending: waiting for another user.",
+            ),
+        )
+        self.assertTrue(bot._is_group_message_for_bot(drag_reply_alt, bot_user))
+
+        # 3. Direct mention: ipaybot without @
+        plain_mention = SimpleNamespace(
+            text="ipaybot how can I invite friends?",
+            reply_to_message=None,
+        )
+        self.assertTrue(bot._is_group_message_for_bot(plain_mention, bot_user))
+
+        # 4. Direct mention: @ipaybot with punctuation
+        tag_mention = SimpleNamespace(
+            text="@ipaybot, what is minimum withdrawal?",
+            reply_to_message=None,
+        )
+        self.assertTrue(bot._is_group_message_for_bot(tag_mention, bot_user))
+
+        # 5. Unrelated group message
+        unrelated = SimpleNamespace(
+            text="good morning everyone in group",
+            reply_to_message=None,
+        )
+        self.assertFalse(bot._is_group_message_for_bot(unrelated, bot_user))
+
+    def test_ai_reply_incorporates_dragged_message_context(self):
+        """When a user drags/replies to a message, ai_reply forwards the quoted text as context."""
+        replied_msg = SimpleNamespace(
+            text="Withdrawal locked: your order wallet may become locked due to unstable connection.",
+            from_user=SimpleNamespace(id=777, is_bot=True),
+        )
+        message = SimpleNamespace(
+            text="Why is this locked and how to fix?",
+            message_id=9001,
+            reply_to_message=replied_msg,
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=321),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=321),
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(id=777, username="ipaybot"),
+            application=SimpleNamespace(
+                bot_data={
+                    "guide": self.make_guide(),
+                    "last_message_at": {},
+                }
+            ),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "drag-context.sqlite3"),
+            patch.object(
+                bot,
+                "_ai_answer",
+                new=AsyncMock(return_value=("Relink your wallet in the app.", [])),
+            ) as ai_answer,
+            patch.object(bot, "add_message"),
+        ):
+            asyncio.run(bot.ai_reply(update, context))
+
+        ai_answer.assert_awaited_once()
+        forwarded_question = ai_answer.await_args.args[0]
+        self.assertIn("[Context - Replying to:", forwarded_question)
+        self.assertIn("Withdrawal locked", forwarded_question)
+        self.assertIn("Why is this locked and how to fix?", forwarded_question)
+
+    def test_ask_command_incorporates_dragged_message_context(self):
+        """When /ask is used while replying to a message, the dragged message context is forwarded."""
+        replied_msg = SimpleNamespace(
+            text="Referral reward requires 15 orders after registration.",
+            from_user=SimpleNamespace(id=777),
+        )
+        message = SimpleNamespace(
+            text="/ask how many orders are needed?",
+            message_id=9002,
+            reply_to_message=replied_msg,
+            reply_text=AsyncMock(),
+            reply_photo=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=322),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=322),
+        )
+        context = SimpleNamespace(
+            args=["how", "many", "orders", "are", "needed?"],
+            bot=SimpleNamespace(id=777, username="ipaybot"),
+            application=SimpleNamespace(
+                bot_data={
+                    "guide": self.make_guide(),
+                    "last_message_at": {},
+                }
+            ),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "ask-drag.sqlite3"),
+            patch.object(
+                bot,
+                "_ai_answer",
+                new=AsyncMock(return_value=("15 orders are required.", [])),
+            ) as ai_answer,
+            patch.object(bot, "add_message"),
+        ):
+            asyncio.run(bot.ask_command(update, context))
+
+        ai_answer.assert_awaited_once()
+        forwarded_question = ai_answer.await_args.args[0]
+        self.assertIn("[Context - Replying to:", forwarded_question)
+        self.assertIn("Referral reward requires 15 orders", forwarded_question)
+        self.assertIn("how many orders are needed?", forwarded_question)
+
+    def test_system_rules_contains_advanced_question_checking_and_complete_answers(self):
+        """Verify that SYSTEM_RULES contains comprehensive question checking and full answers rules."""
+        self.assertIn("ADVANCED QUESTION CHECKING & THOROUGH COMPLETE ANSWERS", bot.SYSTEM_RULES)
+        self.assertIn("COMPREHENSIVE QUESTION CHECKING", bot.SYSTEM_RULES)
+        self.assertIn("Quoted / Dragged Context", bot.SYSTEM_RULES)
+        self.assertIn("Multi-Part Queries", bot.SYSTEM_RULES)
+        self.assertIn("PROVIDING FULL, COMPLETE, AND ACTIONABLE ANSWERS", bot.SYSTEM_RULES)
+        self.assertGreaterEqual(bot.AI_MAX_OUTPUT_TOKENS, 500)
+
+    def test_category_6_and_7_in_system_rules_and_knowledge(self):
+        """Verify Category 6 (Technical Errors) and Category 7 (Wallet Issues) are configured in SYSTEM_RULES."""
+        self.assertIn("CATEGORY 6 — TECHNICAL ERRORS", bot.SYSTEM_RULES)
+        self.assertIn("74a941d5-c22a-46e4-8b72-5828ceb4aa54", bot.SYSTEM_RULES)
+        self.assertIn("technical_error", bot.SYSTEM_RULES)
+        self.assertIn("CATEGORY 7 — WALLET ISSUES", bot.SYSTEM_RULES)
+        self.assertIn("8e6b0e9e-08e6-4bbb-bd6e-10866061f653", bot.SYSTEM_RULES)
+        self.assertIn("wallet", bot.SYSTEM_RULES)
+        self.assertIn("Tools section below the bar", bot.SYSTEM_RULES)
+        self.assertIn("24 hours", bot.SYSTEM_RULES)
+
+    def test_category_6_technical_errors_ai_queries(self):
+        """Test AI answering for Category 6 technical errors across English, Telugu, and typos."""
+        fake_client = self.make_gemini_client("Check your network connection. Try switching to another network.")
+        with patch.object(bot, "DB_PATH", self.root / "tech-err.sqlite3"):
+            ans_load, _ = asyncio.run(bot._ai_answer("My app is not opening.", 1001, self.make_guide(), gemini_client=fake_client))
+            self.assertIn("network", ans_load.lower())
+
+            fake_client2 = self.make_gemini_client("Wait for some time and try again.")
+            ans_crash, _ = asyncio.run(bot._ai_answer("App crashing.", 1002, self.make_guide(), gemini_client=fake_client2))
+            self.assertIn("wait", ans_crash.lower())
+
+            fake_client3 = self.make_gemini_client("నెట్‌వర్క్ కనెక్షన్ చెక్ చేసి వేరే నెట్‌వర్క్‌కి మారండి.")
+            ans_tel, _ = asyncio.run(bot._ai_answer("App open avvatledu.", 1003, self.make_guide(), gemini_client=fake_client3))
+            self.assertTrue(len(ans_tel) > 0)
+
+    def test_category_7_wallet_issues_ai_queries(self):
+        """Test AI answering for Category 7 wallet issues across English, Telugu, and code-mixing."""
+        fake_client = self.make_gemini_client("Go to the Tools section below the bar, click Add, and add your wallet.")
+        with patch.object(bot, "DB_PATH", self.root / "wallet-issues.sqlite3"):
+            ans_add, _ = asyncio.run(bot._ai_answer("How to add wallet?", 2001, self.make_guide(), gemini_client=fake_client))
+            self.assertIn("tools", ans_add.lower())
+
+            fake_client2 = self.make_gemini_client("It is not possible to permanently remove a wallet once bound. You can log out.")
+            ans_rem, _ = asyncio.run(bot._ai_answer("Can I permanently remove my wallet?", 2002, self.make_guide(), gemini_client=fake_client2))
+            self.assertIn("not possible to permanently remove", ans_rem.lower())
+
+            fake_client3 = self.make_gemini_client("If your wallet is still locked after 24 hours, contact customer support.")
+            ans_lock, _ = asyncio.run(bot._ai_answer("Wallet locked for 24 hours.", 2003, self.make_guide(), gemini_client=fake_client3))
+            self.assertIn("customer support", ans_lock.lower())
+
+    def test_conversational_casual_and_follow_up_chat(self):
+        """Test conversational replies for small-talk, ambiguity clarification, and follow-ups."""
+        guide = self.make_guide()
+        # 1. Casual small talk via fallback
+        ans_how = bot._ai_unavailable_answer("How are you?", guide)
+        self.assertIn("doing well", ans_how.lower())
+
+        ans_there = bot._ai_unavailable_answer("Are you there?", guide)
+        self.assertIn("here", ans_there.lower())
+
+        ans_thanks = bot._ai_unavailable_answer("Thanks", guide)
+        self.assertIn("welcome", ans_thanks.lower())
+
+        ans_ok = bot._ai_unavailable_answer("Ok", guide)
+        self.assertIn("alright", ans_ok.lower())
+
+        # 2. Ambiguity clarification
+        ans_prob = bot._ai_unavailable_answer("Problem", guide)
+        self.assertIn("what isn't working exactly", ans_prob.lower())
+
+        # 3. Follow-up troubleshooting failure
+        ans_follow = bot._ai_unavailable_answer("I tried that but still not working", guide)
+        self.assertIn("customer support", ans_follow.lower())
+
+    def test_category_6_and_7_fallbacks_when_ai_unavailable(self):
+        """Test that offline fallbacks correctly handle technical and wallet issues."""
+        guide = self.make_guide()
+        # Technical error fallback
+        fb_tech = bot._ai_unavailable_answer("My app is crashing and not loading", guide)
+        self.assertIn("technical troubleshooting", fb_tech.lower())
+        self.assertIn("switching to another network", fb_tech.lower())
+
+        # Wallet issue fallback
+        fb_wallet = bot._ai_unavailable_answer("My wallet is locked, how to add wallet or relink", guide)
+        self.assertIn("wallet troubleshooting", fb_wallet.lower())
+        self.assertIn("tools section", fb_wallet.lower())
+        self.assertIn("24 hours", fb_wallet.lower())
+
+    def test_multi_user_conversation_isolation(self):
+        """Ensure conversations between two different users remain completely isolated."""
+        with patch.object(bot, "DB_PATH", self.root / "isolation-test.sqlite3"):
+            user1_id = 9101
+            user2_id = 9102
+
+            bot.add_message(user1_id, "user", "My wallet is locked")
+            bot.add_message(user1_id, "assistant", "Please relink your wallet in the Tools section.")
+
+            bot.add_message(user2_id, "user", "How to invite friends?")
+            bot.add_message(user2_id, "assistant", "Go to the Team section to find your referral link.")
+
+            hist1 = bot.get_history(user1_id)
+            hist2 = bot.get_history(user2_id)
+
+            self.assertEqual(len(hist1), 2)
+            self.assertEqual(len(hist2), 2)
+            self.assertIn("wallet", hist1[0]["content"].lower())
+            self.assertNotIn("referral", hist1[0]["content"].lower())
+            self.assertIn("invite", hist2[0]["content"].lower())
+            self.assertNotIn("wallet", hist2[0]["content"].lower())
 
 
 if __name__ == "__main__":
