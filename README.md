@@ -23,6 +23,9 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    Information fields or date/status filters with transaction-record labels.
    Isolated navigation labels, summary totals, monetary values, and status
    words do not qualify.
+   Explicit technical-error notices such as `Network error`, `Failed to load`,
+   or `Something went wrong` receive generic troubleshooting guidance; an
+   isolated `error` keyword is not enough.
    When local OCR finds a high-evidence locking/pending candidate and a Gemini
    client is configured, the resized screenshot is sent to Gemini Vision for
    structured confirmation. A mismatch or invalid response results in no locking

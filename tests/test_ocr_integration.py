@@ -257,6 +257,72 @@ class TesseractIntegrationTests(unittest.TestCase):
         self.assertIn(selected_reply, bot.WITHDRAWAL_IMAGE_REPLIES)
         self.assertNotIn(selected_reply, bot.ORDER_IMAGE_REPLIES)
 
+    def test_explicit_technical_error_screenshot_gets_guidance(self):
+        self._tesseract_command()
+
+        image = Image.new("RGB", (1400, 420), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default(size=38)
+        lines = (
+            "Something went wrong",
+            "Network error",
+            "Please check your connection and try again",
+        )
+        for row, line in enumerate(lines):
+            draw.text((40, 35 + row * 100), line, font=font, fill="#151515")
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        image_bytes = encoded.getvalue()
+
+        ocr_text = bot._tesseract_ocr_bytes(image_bytes)
+        self.assertIsNone(bot._classify_screenshot(ocr_text))
+        self.assertTrue(bot._is_technical_error_screenshot(ocr_text), ocr_text)
+        self.assertFalse(
+            bot._is_technical_error_screenshot(
+                "iPAY Home Balance Deposit Withdrawal Bill History Services Telegram"
+            )
+        )
+
+        sender = AsyncMock()
+        message_id = 889011
+        message = SimpleNamespace(
+            message_id=message_id,
+            photo=[SimpleNamespace(file_id="generated-technical-error")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=message_id, type="private"),
+            effective_user=SimpleNamespace(id=message_id + 100),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(send_message=sender),
+        )
+        with (
+            patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=image_bytes),
+            ),
+            patch.object(bot, "_claim_screenshot_reply", return_value=True),
+            patch.object(
+                bot, "_claim_screenshot_image_cooldown", return_value=True
+            ),
+            patch.object(bot, "_track_issue_spike", new=AsyncMock()),
+        ):
+            asyncio.run(bot.group_screenshot_handler(update, context))
+
+        sender.assert_awaited_once()
+        self.assertIn(
+            "technical error",
+            sender.await_args.kwargs["text"].casefold(),
+        )
+        self.assertEqual(
+            sender.await_args.kwargs["reply_to_message_id"],
+            message_id,
+        )
+
     def test_tesseract_ocr_classifies_withdrawal_pending_reference_screenshot(self):
         self._tesseract_command()
 

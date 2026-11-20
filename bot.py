@@ -2725,6 +2725,39 @@ def _classify_screenshot(text: str) -> Optional[str]:
     return "withdrawal_pending"
 
 
+def _is_technical_error_screenshot(text: str) -> bool:
+    """Recognize explicit error notices without treating general screens as errors."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold())
+    explicit_error_phrases = (
+        r"\bnetwork\s+error\b",
+        r"\b(?:server|request|connection)\s+(?:error|failed|failure)\b",
+        r"\bfailed\s+to\s+(?:load|open|connect|start)\b",
+        r"\bunable\s+to\s+(?:load|open|connect|start)\b",
+        r"\bsomething\s+went\s+wrong\b",
+        r"\b(?:app|application)\s+(?:crashed|crashing|not\s+responding)\b",
+        r"\btemporarily\s+unavailable\b",
+        r"\berror\s+\d{3,5}\b",
+    )
+    if any(re.search(pattern, normalized) for pattern in explicit_error_phrases):
+        return True
+    return bool(
+        re.search(r"\berror\b", normalized)
+        and re.search(
+            r"\b(?:network|internet|connection|server|request|timeout|"
+            r"try\s+again|failed|unavailable)\b",
+            normalized,
+        )
+    )
+
+
+TECHNICAL_ERROR_SCREEN_REPLY = (
+    f"{ICON_PIN} This screenshot appears to show a technical error. Check your "
+    "internet connection and try again. If it continues, contact iPAY Customer "
+    "Support with your UID, a short description, and this screenshot. Never share "
+    "your password, OTP, or UPI PIN."
+)
+
+
 SCREENSHOT_GEMINI_INSTRUCTIONS = (
     "You are an iPAY screenshot classification assistant. Your only task is to "
     "identify the actual visible status in the supplied screenshot. Do not guess "
@@ -3606,6 +3639,37 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         return
     category = _classify_screenshot(ocr_text)
     if not category:
+        if _is_technical_error_screenshot(ocr_text):
+            log.info(
+                "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
+                "category=TECHNICAL_ERROR_SCREEN)",
+                chat.id,
+                message.message_id,
+            )
+            try:
+                await _reply_to_screenshot(
+                    context,
+                    chat.id,
+                    message.message_id,
+                    TECHNICAL_ERROR_SCREEN_REPLY,
+                )
+            except TelegramError as exc:
+                log.warning(
+                    "SCREENSHOT REPLY FAILED (chat_id=%s, message_id=%s, "
+                    "stage=technical_error_send, error=%s)\n%s",
+                    chat.id,
+                    message.message_id,
+                    type(exc).__name__,
+                    _safe_exception_traceback(exc),
+                )
+            else:
+                log.info(
+                    "Sent technical-error screenshot guidance "
+                    "(chat_id=%s, message_id=%s)",
+                    chat.id,
+                    message.message_id,
+                )
+            return
         log.info(
             "CLASSIFICATION RESULT (chat_id=%s, message_id=%s, "
             "category=UNKNOWN_SCREEN, action=IGNORE)",
