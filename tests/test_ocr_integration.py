@@ -45,6 +45,109 @@ class TesseractIntegrationTests(unittest.TestCase):
 
         self.assertEqual(bot._classify_locked_screenshot(text), "order")
 
+    def test_generated_transition_screenshots_route_by_utr_through_handler(self):
+        """Exercise real Tesseract and reply routing without private fixtures."""
+        self._tesseract_command()
+
+        cases = (
+            (
+                "order",
+                bot.ORDER_IMAGE_REPLIES,
+                (
+                    "Transition Information",
+                    "Task ID po_942159179",
+                    "Order ID 6AF9EB19000F",
+                    "UTR 631922777297",
+                    "Expire Time 23:08:41 15/11/2026",
+                    "Pay via bank name mobikwik",
+                    "Payer VPA 9508737769@mbkns",
+                    "Payer Card ID 942159_1794763668251",
+                    "Payee Account 2697",
+                    "Payee Name nithin",
+                    "Payee IFSC 0151",
+                    "Amount 330.00",
+                    "Locking",
+                ),
+            ),
+            (
+                "withdrawal",
+                bot.WITHDRAWAL_IMAGE_REPLIES,
+                (
+                    "Transition Information",
+                    "Task ID pi_642273179",
+                    "Order ID 6AFB2FAE0003",
+                    "UTR",
+                    "Expire Time 22:08:52 16/11/2026",
+                    "Bank Name paytm business",
+                    "Payee VPA paytm.s4q3jcv@pty",
+                    "Payee Card ID 642273_179474957380",
+                    "Payer Name Jane Garcia",
+                    "Order Amt 500.00",
+                    "Actual Amt 500.00",
+                    "Received -500.00 INR",
+                    "Locking",
+                ),
+            ),
+        )
+
+        async def run_cases():
+            for index, (expected, replies, lines) in enumerate(cases):
+                image = Image.new("RGB", (1400, 1200), "white")
+                draw = ImageDraw.Draw(image)
+                font = ImageFont.load_default(size=38)
+                for row, line in enumerate(lines):
+                    draw.text((40, 35 + row * 82), line, font=font, fill="#151515")
+                encoded = BytesIO()
+                image.save(encoded, format="JPEG", quality=86)
+                image_bytes = encoded.getvalue()
+
+                ocr_text = bot._tesseract_ocr_bytes(image_bytes)
+                self.assertEqual(
+                    bot._classify_screenshot(ocr_text),
+                    expected,
+                    msg=f"Generated {expected} transition OCR mismatch: {ocr_text}",
+                )
+
+                sender = AsyncMock()
+                message_id = 889000 + index
+                message = SimpleNamespace(
+                    message_id=message_id,
+                    photo=[SimpleNamespace(file_id=f"generated-{expected}")],
+                    document=None,
+                )
+                update = SimpleNamespace(
+                    effective_message=message,
+                    effective_chat=SimpleNamespace(id=message_id, type="private"),
+                    effective_user=SimpleNamespace(id=message_id + 100),
+                )
+                context = SimpleNamespace(
+                    application=SimpleNamespace(bot_data={}),
+                    bot=SimpleNamespace(send_message=sender),
+                )
+                with (
+                    patch.object(
+                        bot,
+                        "_download_screenshot_bytes",
+                        new=AsyncMock(return_value=image_bytes),
+                    ),
+                    patch.object(bot, "_claim_screenshot_reply", return_value=True),
+                    patch.object(
+                        bot, "_claim_screenshot_image_cooldown", return_value=True
+                    ),
+                    patch.object(bot, "_track_issue_spike", new=AsyncMock()),
+                ):
+                    await bot.group_screenshot_handler(update, context)
+
+                sender.assert_awaited_once()
+                selected_reply = sender.await_args.kwargs["text"]
+                self.assertIn(selected_reply, replies)
+                if expected == "order":
+                    self.assertNotIn(selected_reply, bot.WITHDRAWAL_IMAGE_REPLIES)
+                else:
+                    self.assertNotIn(selected_reply, bot.ORDER_IMAGE_REPLIES)
+
+        asyncio.run(run_cases())
+
     def test_tesseract_ocr_classifies_withdrawal_pending_reference_screenshot(self):
         self._tesseract_command()
 
