@@ -1723,6 +1723,12 @@ class BotTests(unittest.TestCase):
     def test_duplicate_warning_reports_failed_delete_without_false_claim(self):
         from telegram.error import Forbidden
 
+        order_ocr = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Payer VPA wallet@upi Payer Card ID 942159179 "
+            "Payee Account 2697 Payee Name Nithin Payee IFSC 0151 "
+            "Amount 330.00 Locking"
+        )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={}),
             bot=SimpleNamespace(
@@ -1750,7 +1756,7 @@ class BotTests(unittest.TestCase):
             ), patch.object(
                 bot,
                 "_read_screenshot_text",
-                new=AsyncMock(return_value=""),
+                new=AsyncMock(return_value=order_ocr),
             ):
                 await bot.group_screenshot_handler(make_update(910), context)
                 await bot.group_screenshot_handler(make_update(911), context)
@@ -1771,6 +1777,12 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("Your repeated image has been deleted", warning)
 
     def test_duplicate_photo_is_deleted_in_private_chat(self):
+        order_ocr = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Payer VPA wallet@upi Payer Card ID 942159179 "
+            "Payee Account 2697 Payee Name Nithin Payee IFSC 0151 "
+            "Amount 330.00 Locking"
+        )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={}),
             bot=SimpleNamespace(
@@ -1798,7 +1810,7 @@ class BotTests(unittest.TestCase):
             ), patch.object(
                 bot,
                 "_read_screenshot_text",
-                new=AsyncMock(return_value=""),
+                new=AsyncMock(return_value=order_ocr),
             ):
                 await bot.group_screenshot_handler(make_update(920), context)
                 await bot.group_screenshot_handler(make_update(921), context)
@@ -1821,6 +1833,114 @@ class BotTests(unittest.TestCase):
             "🗑️ Your repeated image has been deleted.\n\n"
             "⏳ Please wait 5 minutes before sending the same image again.\n\n"
             "◆ THANK YOU FOR YOUR COOPERATION!",
+        )
+
+    def test_unclassified_image_can_be_retried_without_duplicate_warning(self):
+        order_ocr = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Payer VPA wallet@upi Payer Card ID 942159179 "
+            "Payee Account 2697 Payee Name Nithin Payee IFSC 0151 "
+            "Amount 330.00 Locking"
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(),
+                delete_message=AsyncMock(),
+            ),
+        )
+
+        def make_update(message_id):
+            return SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=message_id,
+                    photo=[SimpleNamespace(file_id=f"retry-{message_id}")],
+                    document=None,
+                ),
+                effective_chat=SimpleNamespace(id=905, type="private"),
+                effective_user=SimpleNamespace(id=906),
+            )
+
+        async def scenario():
+            with (
+                patch.object(
+                    bot,
+                    "_download_screenshot_bytes",
+                    new=AsyncMock(return_value=b"retryable-image"),
+                ),
+                patch.object(
+                    bot,
+                    "_read_screenshot_text",
+                    new=AsyncMock(side_effect=("", order_ocr)),
+                ),
+            ):
+                await bot.group_screenshot_handler(make_update(930), context)
+                await bot.group_screenshot_handler(make_update(931), context)
+
+        with patch.object(bot, "DB_PATH", self.root / "retry-unclassified.sqlite3"):
+            asyncio.run(scenario())
+
+        context.bot.delete_message.assert_not_awaited()
+        context.bot.send_message.assert_awaited_once()
+        self.assertIn(
+            context.bot.send_message.await_args.kwargs["text"],
+            bot.ORDER_IMAGE_REPLIES,
+        )
+
+    def test_failed_reply_does_not_block_retry_of_the_same_image(self):
+        from telegram.error import Forbidden
+
+        order_ocr = (
+            "Transition Information Task ID po_942159179 Order ID 6AF9EB19000F "
+            "UTR 631922777297 Payer VPA wallet@upi Payer Card ID 942159179 "
+            "Payee Account 2697 Payee Name Nithin Payee IFSC 0151 "
+            "Amount 330.00 Locking"
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(
+                    side_effect=[Forbidden("send blocked"), None]
+                ),
+                delete_message=AsyncMock(),
+            ),
+        )
+
+        def make_update(message_id):
+            return SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    message_id=message_id,
+                    photo=[SimpleNamespace(file_id=f"failed-reply-{message_id}")],
+                    document=None,
+                ),
+                effective_chat=SimpleNamespace(id=907, type="private"),
+                effective_user=SimpleNamespace(id=908),
+            )
+
+        async def scenario():
+            with (
+                patch.object(
+                    bot,
+                    "_download_screenshot_bytes",
+                    new=AsyncMock(return_value=b"failed-reply-image"),
+                ),
+                patch.object(
+                    bot,
+                    "_read_screenshot_text",
+                    new=AsyncMock(return_value=order_ocr),
+                ),
+            ):
+                await bot.group_screenshot_handler(make_update(940), context)
+                await bot.group_screenshot_handler(make_update(941), context)
+
+        with patch.object(bot, "DB_PATH", self.root / "failed-reply.sqlite3"):
+            asyncio.run(scenario())
+
+        context.bot.delete_message.assert_not_awaited()
+        self.assertEqual(context.bot.send_message.await_count, 2)
+        self.assertIn(
+            context.bot.send_message.await_args_list[1].kwargs["text"],
+            bot.ORDER_IMAGE_REPLIES,
         )
 
     def test_strict_locked_ocr_cannot_be_vetoed_by_gemini(self):

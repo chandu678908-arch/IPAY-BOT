@@ -3426,6 +3426,44 @@ async def _delete_duplicate_screenshot(context, chat_id: int, message_id: int) -
     return True
 
 
+async def _claim_screenshot_image_or_warn(
+    context,
+    chat_id: int,
+    message_id: int,
+    user_id: int,
+    image_hash: str,
+) -> tuple[bool, bool]:
+    """Return whether processing may proceed and whether a cooldown was claimed."""
+    try:
+        allowed = await asyncio.to_thread(
+            _claim_screenshot_image_cooldown,
+            user_id,
+            image_hash,
+        )
+    except Exception as exc:
+        log.error(
+            "Image cooldown check failed; continuing normal processing "
+            "(message_id=%s, error=%s)",
+            message_id,
+            type(exc).__name__,
+        )
+        return True, False
+    if allowed:
+        return True, True
+
+    log.info("Duplicate screenshot image detected (message_id=%s)", message_id)
+    deleted = await _delete_duplicate_screenshot(context, chat_id, message_id)
+    warning = _duplicate_image_warning(user_id, deleted)
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=warning)
+    except TelegramError as exc:
+        log.warning(
+            "Could not send duplicate image warning (%s)",
+            type(exc).__name__,
+        )
+    return False, False
+
+
 def _claim_screenshot_image_cooldown(
     user_id: int,
     image_hash: str,
@@ -3507,6 +3545,44 @@ def _claim_screenshot_image_cooldown(
         return True
 
 
+def _release_screenshot_image_cooldown(user_id: int, image_hash: str) -> None:
+    """Release a duplicate-image reservation when no reply was delivered."""
+    if not re.fullmatch(r"[0-9a-f]{64}", image_hash):
+        raise ValueError("image_hash must be a lowercase SHA-256 digest")
+
+    supabase_error = None
+    if supabase_enabled():
+        try:
+            (
+                supabase_client()
+                .table("screenshot_image_cooldowns")
+                .delete()
+                .eq("user_id", user_id)
+                .eq("image_hash", image_hash)
+                .execute()
+            )
+        except Exception as exc:
+            supabase_error = exc
+            log.warning(
+                "Supabase screenshot image cooldown release failed "
+                "(type=%s, code=%s)",
+                type(exc).__name__,
+                getattr(exc, "code", "unknown"),
+            )
+
+    with closing(db()) as conn:
+        cursor = conn.execute(
+            "DELETE FROM screenshot_image_cooldowns "
+            "WHERE user_id=? AND image_hash=?",
+            (user_id, image_hash),
+        )
+        conn.commit()
+    if supabase_error is not None and cursor.rowcount == 0:
+        raise RuntimeError(
+            "Could not release the Supabase screenshot image cooldown"
+        ) from supabase_error
+
+
 async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
@@ -3574,6 +3650,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         message, "from_user", None
     )
     user_id = getattr(user, "id", None)
+    image_hash = None
     if user_id is not None:
         try:
             image_hash = _screenshot_image_hash(image_bytes)
@@ -3583,43 +3660,6 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
                 message.message_id,
                 type(exc).__name__,
             )
-        else:
-            try:
-                allowed = await asyncio.to_thread(
-                    _claim_screenshot_image_cooldown,
-                    user_id,
-                    image_hash,
-                )
-            except Exception as exc:
-                log.error(
-                    "Image cooldown check failed; continuing normal processing "
-                    "(message_id=%s, error=%s)",
-                    message.message_id,
-                    type(exc).__name__,
-                )
-            else:
-                if not allowed:
-                    log.info(
-                        "Duplicate screenshot image detected (message_id=%s)",
-                        message.message_id,
-                    )
-                    deleted = await _delete_duplicate_screenshot(
-                        context,
-                        chat.id,
-                        message.message_id,
-                    )
-                    warning = _duplicate_image_warning(user_id, deleted)
-                    try:
-                        await context.bot.send_message(
-                            chat_id=chat.id,
-                            text=warning,
-                        )
-                    except TelegramError as exc:
-                        log.warning(
-                            "Could not send duplicate image warning (%s)",
-                            type(exc).__name__,
-                        )
-                    return
     else:
         log.warning(
             "Screenshot user ID unavailable; skipping image cooldown "
@@ -3627,6 +3667,47 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             chat.id,
             message.message_id,
         )
+
+    cooldown_claimed = False
+
+    async def release_image_cooldown(reason: str) -> None:
+        nonlocal cooldown_claimed
+        if not cooldown_claimed or user_id is None or image_hash is None:
+            return
+        try:
+            await asyncio.to_thread(
+                _release_screenshot_image_cooldown,
+                user_id,
+                image_hash,
+            )
+        except Exception as exc:
+            log.error(
+                "SCREENSHOT IMAGE COOLDOWN RELEASE FAILED "
+                "(chat_id=%s, message_id=%s, reason=%s, error=%s)",
+                chat.id,
+                message.message_id,
+                reason,
+                type(exc).__name__,
+            )
+        else:
+            log.info(
+                "Released screenshot image cooldown "
+                "(message_id=%s, reason=%s)",
+                message.message_id,
+                reason,
+            )
+        cooldown_claimed = False
+
+    if user_id is not None and image_hash is not None:
+        allowed, cooldown_claimed = await _claim_screenshot_image_or_warn(
+            context,
+            chat.id,
+            message.message_id,
+            user_id,
+            image_hash,
+        )
+        if not allowed:
+            return
 
     ocr_text = await _read_screenshot_text(message, context, image_bytes)
     if not ocr_text:
@@ -3636,6 +3717,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             chat.id,
             message.message_id,
         )
+        await release_image_cooldown("unreadable_ocr")
         return
     category = _classify_screenshot(ocr_text)
     if not category:
@@ -3662,6 +3744,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
                     type(exc).__name__,
                     _safe_exception_traceback(exc),
                 )
+                await release_image_cooldown("technical_error_reply_failed")
             else:
                 log.info(
                     "Sent technical-error screenshot guidance "
@@ -3676,6 +3759,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             chat.id,
             message.message_id,
         )
+        await release_image_cooldown("unknown_screen")
         return
     strict_locked_match = (
         category in {"order", "withdrawal"}
@@ -3704,6 +3788,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
                 chat.id,
                 message.message_id,
             )
+            await release_image_cooldown("vision_not_confirmed")
             return
         if vision_confirmed is None:
             log.info(
@@ -3753,6 +3838,7 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
             type(exc).__name__,
             _safe_exception_traceback(exc),
         )
+        await release_image_cooldown("reply_failed")
     else:
         log.info(
             "Sent screenshot reply (chat_id=%s, message_id=%s)",

@@ -37,7 +37,9 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    The per-user exact-image cooldown defaults to 300 seconds and can be set with
    `SCREENSHOT_IMAGE_COOLDOWN_SECONDS`. Non-default values require the
    three-argument Supabase RPC overload provided by the cooldown configuration
-   or recovery migration.
+   or recovery migration. A reservation is made before OCR to suppress
+   concurrent duplicate uploads; if an image is ignored or its reply fails, the
+   reservation is released so the same image can be retried.
    The Docker image
    installs Tesseract at `/usr/bin/tesseract` and runs an actual generated-image
    OCR smoke test during the build; local hosts need Tesseract available on
