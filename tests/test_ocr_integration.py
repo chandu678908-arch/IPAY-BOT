@@ -148,6 +148,115 @@ class TesseractIntegrationTests(unittest.TestCase):
 
         asyncio.run(run_cases())
 
+    def test_generated_telegram_capture_routes_only_latest_forwarded_panel(self):
+        self._tesseract_command()
+
+        image = Image.new("RGB", (768, 1706), "#10202f")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default(size=16)
+
+        def draw_forwarded_panel(top, lines):
+            draw.rounded_rectangle(
+                (405, top, 748, top + 550),
+                radius=12,
+                fill="white",
+                outline="#7657d5",
+                width=4,
+            )
+            draw.rectangle((407, top, 746, top + 48), fill="#7657d5")
+            draw.text(
+                (420, top + 12),
+                "Forwarded from Alice",
+                font=font,
+                fill="white",
+            )
+            for row, line in enumerate(lines):
+                draw.text(
+                    (420, top + 62 + row * 28),
+                    line,
+                    font=font,
+                    fill="#151515",
+                )
+
+        draw_forwarded_panel(
+            130,
+            (
+                "Transition Information",
+                "Task ID po_942159179",
+                "Order ID 6AF9EB19000F",
+                "UTR 631922777297",
+                "Payer VPA 9508737769",
+                "Payer Card ID 942159179",
+                "Payee Account 2697",
+                "Payee Name Nithin",
+                "Payee IFSC 0151",
+                "Amount 330.00",
+                "Locking",
+            ),
+        )
+        draw_forwarded_panel(
+            820,
+            (
+                "Transition Information",
+                "Task ID pi_642273179",
+                "Order ID 6AFB2FAE0003",
+                "UTR 0",
+                "Bank Name paytm business",
+                "Payee VPA paytm.s4q3jcv",
+                "Payee Card ID 642273179",
+                "Payer Name Jane Garcia",
+                "Order Amt 500.00",
+                "Actual Amt 500.00",
+                "Received -500.00 INR",
+                "Locking",
+            ),
+        )
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        image_bytes = encoded.getvalue()
+
+        ocr_text = bot._tesseract_ocr_bytes(image_bytes)
+        self.assertEqual(
+            bot._classify_screenshot(ocr_text),
+            "withdrawal",
+            msg=f"Latest forwarded panel was not selected: {ocr_text}",
+        )
+
+        sender = AsyncMock()
+        message_id = 889010
+        message = SimpleNamespace(
+            message_id=message_id,
+            photo=[SimpleNamespace(file_id="generated-forwarded-panels")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=message_id, type="private"),
+            effective_user=SimpleNamespace(id=message_id + 100),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(send_message=sender),
+        )
+        with (
+            patch.object(
+                bot,
+                "_download_screenshot_bytes",
+                new=AsyncMock(return_value=image_bytes),
+            ),
+            patch.object(bot, "_claim_screenshot_reply", return_value=True),
+            patch.object(
+                bot, "_claim_screenshot_image_cooldown", return_value=True
+            ),
+            patch.object(bot, "_track_issue_spike", new=AsyncMock()),
+        ):
+            asyncio.run(bot.group_screenshot_handler(update, context))
+
+        sender.assert_awaited_once()
+        selected_reply = sender.await_args.kwargs["text"]
+        self.assertIn(selected_reply, bot.WITHDRAWAL_IMAGE_REPLIES)
+        self.assertNotIn(selected_reply, bot.ORDER_IMAGE_REPLIES)
+
     def test_tesseract_ocr_classifies_withdrawal_pending_reference_screenshot(self):
         self._tesseract_command()
 

@@ -666,12 +666,13 @@ class BotTests(unittest.TestCase):
         fake_pytesseract = SimpleNamespace(
             pytesseract=SimpleNamespace(tesseract_cmd=""),
             image_to_string=Mock(return_value="Order Locking 100 Quota 104"),
+            Output=MagicMock(),
         )
-        fake_image = MagicMock()
+        fake_image = MagicMock(width=1000, height=1000)
         fake_image.__enter__.return_value = fake_image
         fake_image.__exit__.return_value = False
         with patch.dict("sys.modules", {
-            "PIL": SimpleNamespace(Image=SimpleNamespace(open=Mock(return_value=fake_image))),
+            "PIL": SimpleNamespace(Image=SimpleNamespace(open=Mock(return_value=fake_image)), ImageOps=MagicMock()),
             "pytesseract": fake_pytesseract,
         }), patch.dict("os.environ", {"TESSERACT_CMD": "/usr/bin/tesseract"}), patch.object(
             bot, "_resolve_tesseract_command", return_value="/usr/bin/tesseract"
@@ -2228,7 +2229,7 @@ class BotTests(unittest.TestCase):
         }
         self.assertEqual(
             commands,
-            {"start", "hi", *bot.BOOST_COMMANDS, "questions", "qsearch", "qstatus", "qnote", "qresolve", "qshow", "qhistory", "qassign", "dailyreport", "unanswered"},
+            {"start", "hi", *bot.BOOST_COMMANDS, "questions", "qsearch", "qstatus", "qnote", "qresolve", "qshow", "qhistory", "qassign", "dailyreport", "unanswered", "ask", "reset", "clear"},
         )
         boost_handlers = [
             handler
@@ -2245,7 +2246,7 @@ class BotTests(unittest.TestCase):
         ]
         self.assertEqual(len(caption_handlers), 1)
         self.assertEqual(caption_handlers[0].callback, bot.boost_caption_handler)
-        self.assertEqual(len(application.handlers[0]), 15)
+        self.assertEqual(len(application.handlers[0]), 17)
         screenshot_handlers = [
             handler
             for handler in application.handlers[-2]
@@ -2303,7 +2304,7 @@ class BotTests(unittest.TestCase):
             published_scopes.append(call.kwargs["scope"].type)
         self.assertEqual(
             published_commands,
-            [["start", "boost"]] * 3,
+            [["start", "boost", "ask", "reset"]] * 3,
         )
         self.assertEqual(
             published_scopes,
@@ -5026,6 +5027,697 @@ class BotTests(unittest.TestCase):
             return telegram_bot.send_chat_action.await_count
 
         self.assertEqual(asyncio.run(scenario()), 1)
+
+
+    # ------------------------------------------------------------------ #
+    #  AI Customer Support Feature Tests                                   #
+    # ------------------------------------------------------------------ #
+
+    def test_ask_command_handler_is_registered(self):
+        """ask_command must be registered as a CommandHandler in build_application."""
+        from telegram.ext import CommandHandler as CH
+        app = bot.build_application("FAKE:TOKEN")
+        handler_commands = []
+        for group_handlers in app.handlers.values():
+            for h in group_handlers:
+                if isinstance(h, CH):
+                    handler_commands.extend(list(h.commands))
+        self.assertIn("ask", handler_commands, "/ask handler not registered in build_application()")
+
+    def test_reset_command_handler_is_registered(self):
+        """reset_command must be registered as a CommandHandler in build_application."""
+        from telegram.ext import CommandHandler as CH
+        app = bot.build_application("FAKE:TOKEN")
+        handler_commands = []
+        for group_handlers in app.handlers.values():
+            for h in group_handlers:
+                if isinstance(h, CH):
+                    handler_commands.extend(list(h.commands))
+        self.assertIn("reset", handler_commands, "/reset handler not registered in build_application()")
+        self.assertIn("clear", handler_commands, "/clear alias not registered in build_application()")
+
+    def test_clear_conversation_history_sqlite(self):
+        """_clear_conversation_history deletes rows from SQLite for the given chat_id."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "test.sqlite3")
+            with patch.object(bot, "DB_PATH", db_path):
+                # Trigger schema creation by opening the DB
+                bot.db().close()
+                bot.add_message(1001, "user", "hello")
+                bot.add_message(1001, "assistant", "hi there")
+                bot.add_message(9999, "user", "other user message")
+                # Verify messages exist
+                history_before = bot.get_history(1001)
+                self.assertEqual(len(history_before), 2)
+                # Clear only chat 1001
+                bot._clear_conversation_history(1001)
+                history_after = bot.get_history(1001)
+                self.assertEqual(len(history_after), 0, "History should be empty after clear")
+                # Other user's history must be intact
+                other_history = bot.get_history(9999)
+                self.assertEqual(len(other_history), 1)
+
+    def test_reset_command_replies_success(self):
+        """reset_command sends a success message when history is cleared."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "test.sqlite3")
+            with patch.object(bot, "DB_PATH", db_path):
+                bot.db().close()
+                bot.add_message(42, "user", "some question")
+                message = SimpleNamespace(reply_text=AsyncMock())
+                chat = SimpleNamespace(id=42)
+                update = SimpleNamespace(effective_message=message, effective_chat=chat)
+                context = SimpleNamespace()
+                asyncio.run(bot.reset_command(update, context))
+                message.reply_text.assert_awaited_once()
+                sent = message.reply_text.await_args.args[0]
+                self.assertIn("cleared", sent.lower())
+
+    def test_reset_command_works_with_no_history(self):
+        """reset_command does not crash when there is no history to clear."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "test.sqlite3")
+            with patch.object(bot, "DB_PATH", db_path):
+                bot.db().close()
+                message = SimpleNamespace(reply_text=AsyncMock())
+                chat = SimpleNamespace(id=777)
+                update = SimpleNamespace(effective_message=message, effective_chat=chat)
+                context = SimpleNamespace()
+                asyncio.run(bot.reset_command(update, context))
+                message.reply_text.assert_awaited_once()
+
+    def test_ask_command_usage_when_no_args(self):
+        """ask_command replies with usage instructions when called with no arguments."""
+        message = SimpleNamespace(reply_text=AsyncMock())
+        chat = SimpleNamespace(id=55, type="private")
+        update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=None)
+        context = SimpleNamespace(args=[], application=SimpleNamespace(bot_data={}))
+        asyncio.run(bot.ask_command(update, context))
+        message.reply_text.assert_awaited_once()
+        sent = message.reply_text.await_args.args[0]
+        self.assertIn("/ask", sent)
+
+    def test_ask_command_rejects_sensitive_input(self):
+        """ask_command rejects questions containing passwords or OTPs."""
+        message = SimpleNamespace(reply_text=AsyncMock())
+        chat = SimpleNamespace(id=56, type="private")
+        update = SimpleNamespace(effective_message=message, effective_chat=chat, effective_user=None)
+        context = SimpleNamespace(args=["my", "password", "is", "secret123"], application=SimpleNamespace(bot_data={}))
+        with patch.object(bot, "_contains_sensitive_input", return_value=True):
+            asyncio.run(bot.ask_command(update, context))
+        message.reply_text.assert_awaited_once()
+        sent = message.reply_text.await_args.args[0]
+        self.assertIn("password", sent.lower())
+
+    def test_clear_conversation_history_function_exists(self):
+        """_clear_conversation_history must be importable from bot module."""
+        self.assertTrue(
+            callable(getattr(bot, "_clear_conversation_history", None)),
+            "_clear_conversation_history not found in bot module",
+        )
+
+    def test_reset_command_function_exists(self):
+        """reset_command must be importable from bot module."""
+        self.assertTrue(
+            callable(getattr(bot, "reset_command", None)),
+            "reset_command not found in bot module",
+        )
+
+    # ------------------------------------------------------------------ #
+    #  iPAY AI Customer Support — Categories 1 & 2 Tests                 #
+    # ------------------------------------------------------------------ #
+
+    def test_category1_how_to_invite_english_prompt_grounding(self):
+        """AI answer receives Category 1 instructions for how to invite in English."""
+        async def response_stream():
+            yield SimpleNamespace(text="Open iPAY App, go to Team section, and share your referral link.")
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat1-invite.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "How to invite someone to iPAY?",
+                    501,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        self.assertIn("Team", answer)
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Team section", instructions)
+        self.assertIn("referral link", instructions)
+        self.assertIn("complete registration", instructions)
+
+    def test_category1_missing_referral_reward_route(self):
+        """AI receives the exact in-app route for missing referral reward."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Navigate to Assets -> Bonus -> Referral Banner -> View Detail to check and claim."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat1-missing.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Referral bonus not received",
+                    502,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Assets → Bonus → Referral Banner → View Detail", instructions)
+        self.assertIn("₹100", instructions)
+        self.assertIn("₹50", instructions)
+        self.assertIn("15 orders", instructions)
+
+    def test_category1_telugu_query_multilingual_handling(self):
+        """AI receives Telugu query and system prompt enforces replying in Telugu."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="మీ రిఫరల్ బోనస్ కోసం iPAY యాప్ లో Assets -> Bonus -> Referral Banner -> View Detail కి వెళ్ళండి."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat1-telugu.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "నా రిఫరల్ బోనస్ రాలేదు",
+                    503,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        self.assertIn("Assets", answer)
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Telugu", instructions)
+        self.assertIn("SAME LANGUAGE", instructions)
+        self.assertIn("నా రిఫరల్ బోనస్ రాలేదు", instructions)
+
+    def test_category1_hinglish_misspelling_and_mixed_language(self):
+        """AI receives misspelled Hinglish query and contains the 15 orders requirement."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Invited user ko 15 orders pure karne honge, reward automatically credit ho jayega."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat1-hinglish.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Referal amout kab milega?",
+                    504,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("15 orders", instructions)
+        self.assertIn("Referal amout kab milega?", instructions)
+        self.assertIn("automatically", instructions)
+
+    def test_category1_slang_and_informal_typing(self):
+        """AI handles informal slang 'How to invite frnd' with Team section guidance."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Open iPAY App -> Team section and share your referral link."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat1-slang.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "How to invite frnd",
+                    505,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("How to invite frnd", instructions)
+        self.assertIn("Team section", instructions)
+
+    def test_category2_what_is_ipay_commission_example(self):
+        """AI receives Category 2 definition of iPAY with exact ₹1,000 / ₹1,040 4% example."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="iPAY is an application where users earn money by placing orders. Example: ₹1,000 order = ₹1,040 with 4% commission."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat2-whatis.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "What is iPAY?",
+                    506,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("earn money by placing orders", instructions)
+        self.assertIn("1,040", instructions)
+        self.assertIn("4% commission", instructions)
+
+    def test_category2_hindi_support_kaha_milega(self):
+        """AI handles Hindi query 'support kaha milega' with 24/7 admin support context."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Aap official group ya admin DM se 24/7 support le sakte hain. Usual response time 3-5 minutes hai."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat2-kaha.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "support kaha milega",
+                    507,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("support kaha milega", instructions)
+        self.assertIn("24/7", instructions)
+        self.assertIn("3–5 minutes", instructions)
+
+    def test_category2_reporting_problem_information_required(self):
+        """Reporting problems specifies UID, screenshot, explanation, and forbids passwords/OTPs."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("UID", instructions)
+        self.assertIn("Screenshot of the relevant issue", instructions)
+        self.assertIn("Clear explanation of the problem", instructions)
+        self.assertIn("Never request passwords, OTPs, UPI PINs", instructions)
+
+    def test_ai_support_unknown_question_guides_to_human_support(self):
+        """AI rules require escalating unresolved or account-specific matters to human support."""
+        instructions = " ".join(bot.SYSTEM_RULES.split())
+        self.assertIn("contact human support", instructions)
+        self.assertIn("official group or admin DM", instructions)
+
+    def test_ai_support_api_failure_fallback_for_referral_query(self):
+        """When Gemini API fails on a referral query, ai_reply catches error and returns helpful fallback."""
+        from google.genai.errors import APIError
+        guide = self.make_guide()
+        message = SimpleNamespace(
+            text="how to invite friend and get referral bonus?",
+            caption=None,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(),
+            message_id=7711,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=991),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=991),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={
+                    "guide": guide,
+                    "gemini_client": SimpleNamespace(),
+                }
+            )
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "api-fail-referral.sqlite3"),
+            patch.object(bot, "_ai_answer", side_effect=APIError(503, "API unavailable")),
+        ):
+            asyncio.run(bot.ai_reply(update, context))
+        message.reply_text.assert_awaited_once()
+        sent_text = message.reply_text.await_args.args[0]
+        self.assertIn("referral guide", sent_text.lower())
+        self.assertIn("Team section", sent_text)
+        self.assertIn("15 orders", sent_text)
+        self.assertIn("₹100", sent_text)
+        self.assertIn("₹50", sent_text)
+        self.assertIn("Assets → Bonus → Referral Banner → View Detail", sent_text)
+
+    def test_ai_support_api_failure_fallback_for_general_support(self):
+        """When Gemini API fails on a general support query, ai_reply catches error and returns general support fallback."""
+        from google.genai.errors import APIError
+        guide = self.make_guide()
+        message = SimpleNamespace(
+            text="what is ipay and how do I contact support?",
+            caption=None,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(),
+            message_id=7712,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=992),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=992),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={
+                    "guide": guide,
+                    "gemini_client": SimpleNamespace(),
+                }
+            )
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "api-fail-general.sqlite3"),
+            patch.object(bot, "_ai_answer", side_effect=APIError(408, "API timeout")),
+        ):
+            asyncio.run(bot.ai_reply(update, context))
+        message.reply_text.assert_awaited_once()
+        sent_text = message.reply_text.await_args.args[0]
+        self.assertIn("general support", sent_text.lower())
+        self.assertIn("24/7", sent_text)
+        self.assertIn("1,040", sent_text)
+        self.assertIn("UID", sent_text)
+
+    def test_multilingual_terms_in_guide_retrieve(self):
+        """Guide retrieval correctly expands and matches Telugu, Hindi, Tamil, Kannada, and Malayalam terms."""
+        project_root = Path(__file__).resolve().parents[1]
+        guide = Guide(
+            project_root / "I_PAY_User_Guide.pdf",
+            self.knowledge_path,
+            self.root / "multi-terms",
+        )
+        # Telugu referral
+        telugu_pages = guide.retrieve("నా రిఫరల్ బోనస్ రాలేదు", top_k=2)
+        self.assertTrue(telugu_pages, "Telugu referral should retrieve pages")
+        # Hindi referral
+        hindi_pages = guide.retrieve("रेफरल बोनस कब मिलेगा", top_k=2)
+        self.assertTrue(hindi_pages, "Hindi referral should retrieve pages")
+        # Tamil support
+        tamil_pages = guide.retrieve("உதவி எங்கே கிடைக்கும்", top_k=2)
+        self.assertTrue(tamil_pages, "Tamil support should retrieve pages")
+        # Kannada support
+        kannada_pages = guide.retrieve("ಸಹಾಯ ಎಲ್ಲಿ ಸಿಗುತ್ತದೆ", top_k=2)
+        self.assertTrue(kannada_pages, "Kannada support should retrieve pages")
+        # Malayalam referral
+        malayalam_pages = guide.retrieve("റഫറൽ ബോണസ് ലഭിച്ചില്ല", top_k=2)
+        self.assertTrue(malayalam_pages, "Malayalam referral should retrieve pages")
+
+    # ------------------------------------------------------------------ #
+    #  iPAY AI Support — Categories 4 & 5 (Payment & Withdrawal) Tests   #
+    # ------------------------------------------------------------------ #
+
+    def test_category4_payment_deducted_not_credited_prompt_grounding(self):
+        """AI receives instructions to check payment app status and contact support."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Please check your payment app status (Pending/Failed/Successful) and contact Customer Support if needed."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat4-deducted.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "My payment deducted but not credited.",
+                    601,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        self.assertIn("payment app status", answer)
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("MONEY DEDUCTED BUT NOT CREDITED", instructions)
+        self.assertIn("check the payment status in their payment application", instructions)
+
+    def test_category4_telugu_payment_success_balance_raledu(self):
+        """AI handles Telugu query 'Payment success aindi kani balance raledu.' and grounds in Telugu."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="పేమెంట్ యాప్‌లో స్టేటస్ చెక్ చేయండి మరియు కస్టమర్ సపోర్ట్‌కి పేమెంట్ స్క్రీన్‌షాట్, ఆర్డర్ వివరాలు అందించండి."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat4-telugu.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Payment success aindi kani balance raledu.",
+                    602,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Payment success aindi kani balance raledu", instructions)
+        self.assertIn("SAME LANGUAGE", instructions)
+
+    def test_category4_hindi_payment_kat_gaya_prompt_grounding(self):
+        """AI handles Hindi query 'मेरा पेमेंट कट गया लेकिन क्रेडिट नहीं हुआ।'."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="अपने पेमेंट ऐप में स्टेटस चेक करें और कस्टमर सपोर्ट से पेमेंट स्क्रीनशॉट व आर्डर डिटेल्स के साथ संपर्क करें।"
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat4-hindi.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "मेरा पेमेंट कट गया लेकिन क्रेडिट नहीं हुआ।",
+                    603,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("मेरा पेमेंट कट गया लेकिन क्रेडिट नहीं हुआ", instructions)
+
+    def test_category4_pending_payment_bank_provider_instruction(self):
+        """AI does not falsely claim iPAY resolves bank-pending transactions."""
+        instructions = " ".join(bot.SYSTEM_RULES.split())
+        self.assertIn("PENDING PAYMENT", instructions)
+        self.assertIn("advise them to contact their bank/payment provider", instructions)
+        self.assertIn("Do not falsely claim that iPAY can control", instructions)
+
+    def test_category4_missing_payment_proof_bills_section(self):
+        """AI instructs users to use the Bills section for payment proof."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("MISSING PAYMENT PROOF", instructions)
+        self.assertIn("Bills section", instructions)
+
+    def test_category4_supported_wallets_payin_vs_withdrawal_distinction(self):
+        """AI must not claim pay-in wallets are confirmed withdrawal methods."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("PhonePe", instructions)
+        self.assertIn("Paytm", instructions)
+        self.assertIn("MobiKwik", instructions)
+        self.assertIn("Freecharge", instructions)
+        self.assertIn("Google Pay Business", instructions)
+        self.assertIn("Do not incorrectly claim that all these wallets are confirmed withdrawal methods", instructions)
+
+    def test_category5_minimum_and_maximum_withdrawal_limits(self):
+        """Category 5 defines minimum ₹100 and points-based maximum."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("Minimum withdrawal amount: ₹100", instructions)
+        self.assertIn("maximum withdrawal depends on the user's available points", instructions)
+        self.assertIn("Never invent a maximum amount", instructions)
+
+    def test_category5_timings_normal_vs_withdrawal_pending(self):
+        """Category 5 defines 5-10 min normal withdrawal and 10-15 min withdrawal pending."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("5–10 minutes", instructions)
+        self.assertIn("WITHDRAWAL_PENDING", instructions)
+        self.assertIn("10–15 minutes", instructions)
+        self.assertIn("pending payment from another user", instructions)
+
+    def test_category5_locked_withdrawal_resolution_relink_wallet(self):
+        """Locked withdrawal guides users to relink their wallet."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("WITHDRAWAL_LOCKED", instructions)
+        self.assertIn("Guide the user to relink their wallet", instructions)
+        self.assertIn("unstable connection or logging out", instructions)
+
+    def test_category5_failed_withdrawal_and_cancellation(self):
+        """Failed withdrawal places a new order; cancellation policy is not invented."""
+        instructions = bot.SYSTEM_RULES
+        self.assertIn("WITHDRAWAL FAILED", instructions)
+        self.assertIn("A new order will be placed", instructions)
+        self.assertIn("WITHDRAWAL CANCELLATION", instructions)
+        self.assertIn("No confirmed cancellation policy is provided", instructions)
+
+    def test_category5_hindi_withdrawal_pending_hai(self):
+        """AI handles Hindi query 'Withdrawal pending hai.' with ~10-15 min pending context."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Withdrawal order process ho raha hai aur dusre user ke payment ke liye pending hai (~10–15 minutes)."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat5-pending-hindi.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Withdrawal pending hai.",
+                    604,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Withdrawal pending hai", instructions)
+
+    def test_category5_telugu_withdraw_avvatledu_bro(self):
+        """AI handles Telugu slang 'Withdraw avvatledu bro.' with ₹100 minimum & 5-10 min normal context."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="Minimum withdrawal ₹100, maximum points aadharanga untundi (~5–10 minutes normal ga)."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat5-avvatledu.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Withdraw avvatledu bro.",
+                    605,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Withdraw avvatledu bro", instructions)
+
+    def test_category5_telugu_order_lock_relink_wallet(self):
+        """AI handles Telugu query 'Order lock ayindi ela solve cheyali?' guiding to relink wallet."""
+        async def response_stream():
+            yield SimpleNamespace(
+                text="iPAY యాప్‌లో మీ వాలెట్‌ను రీలింక్ (relink) చేయండి."
+            )
+
+        generate = AsyncMock(return_value=response_stream())
+        gemini_client = SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+        with patch.object(bot, "DB_PATH", self.root / "cat5-lock-telugu.sqlite3"):
+            answer, _ = asyncio.run(
+                bot._ai_answer(
+                    "Order lock ayindi ela solve cheyali?",
+                    606,
+                    self.make_guide(),
+                    gemini_client=gemini_client,
+                )
+            )
+        instructions = generate.await_args.kwargs["config"].system_instruction
+        self.assertIn("Order lock ayindi ela solve cheyali?", instructions)
+
+    def test_category4_and_5_api_failure_fallbacks(self):
+        """When Gemini API fails, payment and withdrawal queries receive proper Category 4 & 5 offline guidance."""
+        from google.genai.errors import APIError
+        guide = self.make_guide()
+        # Payment failure query
+        msg_pay = SimpleNamespace(
+            text="money deducted but not credited in ipay",
+            caption=None,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(),
+            message_id=8801,
+        )
+        upd_pay = SimpleNamespace(
+            effective_message=msg_pay,
+            effective_user=SimpleNamespace(id=993),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=993),
+        )
+        ctx = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={"guide": guide, "gemini_client": SimpleNamespace()}
+            )
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "api-fail-p4.sqlite3"),
+            patch.object(bot, "_ai_answer", side_effect=APIError(503, "API unavailable")),
+        ):
+            asyncio.run(bot.ai_reply(upd_pay, ctx))
+        msg_pay.reply_text.assert_awaited_once()
+        pay_text = msg_pay.reply_text.await_args.args[0]
+        self.assertIn("payment issues guide", pay_text.lower())
+        self.assertIn("Bills section", pay_text)
+        self.assertIn("Deducted but not credited", pay_text)
+
+        # Withdrawal failure query
+        msg_wth = SimpleNamespace(
+            text="what is the minimum withdraw amount?",
+            caption=None,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(),
+            message_id=8802,
+        )
+        upd_wth = SimpleNamespace(
+            effective_message=msg_wth,
+            effective_user=SimpleNamespace(id=994),
+            effective_chat=SimpleNamespace(type=bot.ChatType.PRIVATE, id=994),
+        )
+        with (
+            patch.object(bot, "DB_PATH", self.root / "api-fail-p5.sqlite3"),
+            patch.object(bot, "_ai_answer", side_effect=APIError(503, "API unavailable")),
+        ):
+            asyncio.run(bot.ai_reply(upd_wth, ctx))
+        msg_wth.reply_text.assert_awaited_once()
+        wth_text = msg_wth.reply_text.await_args.args[0]
+        self.assertIn("withdrawal guidelines", wth_text.lower())
+        self.assertIn("₹100", wth_text)
+        self.assertIn("relink your wallet", wth_text.lower())
 
 
 if __name__ == "__main__":

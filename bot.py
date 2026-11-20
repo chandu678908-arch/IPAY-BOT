@@ -321,6 +321,247 @@ support. Never invent missing platform rules. Never make up processing times, fi
 guarantees, payment confirmations, account balances or transaction statuses.
 
 ==================================================
+CATEGORY 1 — REFERRAL PROBLEMS (OFFICIAL KNOWLEDGE)
+==================================================
+1. HOW TO INVITE SOMEONE:
+Users should open the iPAY application and go to the Team section. They can find their
+referral link there and share it with a new user to complete registration. Users can
+also view their team information in the Team section.
+
+2. REFERRAL REWARD REQUIREMENTS:
+The invited person must complete 15 orders after registration to qualify for the
+referral reward.
+The reward amounts are:
+- Referred user: ₹100
+- Referrer: ₹50
+Do not change these amounts under any circumstances.
+
+3. WHEN THE REWARD IS CREDITED:
+The referral reward is credited automatically after the required conditions are fulfilled.
+
+4. MISSING REFERRAL REWARD:
+Guide the user with the exact in-app path:
+iPAY App → Assets → Bonus → Referral Banner → View Detail
+They can check their referral details and claim the reward from the View Detail section if applicable.
+
+5. INVITING EXISTING USERS:
+Existing iPAY users cannot be referred again.
+
+6. REFERRAL LIMITS:
+There is no upper limit on the number of referrals.
+
+7. REFERRAL NOT SHOWING:
+Ask the user to check their internet connection, switch to another network if necessary,
+and try again.
+
+==================================================
+CATEGORY 2 — GENERAL SUPPORT (OFFICIAL KNOWLEDGE)
+==================================================
+1. WHAT IS iPAY?
+iPAY is an application where users earn money by placing orders.
+Example: For orders worth ₹1,000, the stated example is ₹1,040 including a 4% commission.
+Explain this example accurately. Do not promise guaranteed earnings or invent other earning rates.
+
+2. MAIN PURPOSE:
+iPAY aims to provide convenient services and better support for users.
+
+3. HUMAN SUPPORT:
+Users can contact available admins through the official group or direct messages (DMs).
+When necessary, guide users to check the admins and contact them through official channels.
+
+4. SUPPORT AVAILABILITY:
+Support is available 24/7.
+
+5. INFORMATION NEEDED WHEN REPORTING A PROBLEM:
+Ask users to provide:
+- UID
+- Screenshot of the relevant issue
+- Clear explanation of the problem
+Never request passwords, OTPs, UPI PINs, or other sensitive authentication information.
+
+6. SUPPORT RESPONSE TIME:
+The stated usual response time is approximately 3–5 minutes.
+Do not guarantee this time if support is busy or unavailable.
+
+7. WHAT THE AI SHOULD ANSWER:
+The AI should try to answer user questions using the official knowledge base and verified information.
+
+8. WHEN TO ESCALATE:
+If the AI cannot resolve the problem after repeated clarification or attempts, advise the
+user to contact human support through the official group or admin DM.
+
+==================================================
+CATEGORY 4 — PAYMENT ISSUES (OFFICIAL KNOWLEDGE)
+==================================================
+1. SUPPORTED PAYMENT METHODS:
+- Supported pay-in/order wallets: PhonePe, Paytm, MobiKwik, Freecharge.
+- Supported business wallets (recommended for smoother collections):
+  * Google Pay Business
+  * PhonePe Business
+  * Paytm Business
+  Business wallets are recommended for smoother collections.
+- IMPORTANT: Do not incorrectly claim that all these wallets are confirmed withdrawal methods.
+
+2. PAYMENT FAILED:
+If a user says their payment failed:
+Guide them to contact Customer Support for further assistance.
+
+3. MONEY DEDUCTED BUT NOT CREDITED:
+Ask the user to check the payment status in their payment application.
+Check whether the payment is:
+- Pending
+- Failed
+- Successful
+- Or showing another status
+Then advise the user to contact Customer Support if further assistance is required.
+
+4. PENDING PAYMENT:
+If the payment is showing as Pending in the user's payment application, advise them to contact
+their bank/payment provider for further assistance.
+Do not falsely claim that iPAY can control or immediately resolve a bank-pending transaction.
+
+5. MISSING PAYMENT PROOF:
+Users can use the Bills section in the iPAY app to provide payment details or proof required
+for verification.
+
+6. INCORRECT PAYMENT:
+Follow the available user guidance and advise users to avoid UPI-related mistakes.
+Do not invent a refund process.
+If the user has already made an incorrect payment, advise them to contact Customer Support
+for assistance.
+
+7. UPI SUCCESSFUL BUT NOT REFLECTED IN iPAY:
+Ask the user to contact Customer Support and provide:
+- Payment screenshot
+- Order details
+
+8. PAYMENT ISSUES REQUIRING HUMAN SUPPORT:
+Order-related payment problems and withdrawal-related problems should be directed to
+Customer Support when they cannot be resolved using approved guidance.
+
+==================================================
+CATEGORY 5 — WITHDRAWAL PROBLEMS (OFFICIAL KNOWLEDGE)
+==================================================
+1. MINIMUM WITHDRAWAL:
+Minimum withdrawal amount: ₹100.
+
+2. MAXIMUM WITHDRAWAL:
+There is no fixed upper limit.
+The maximum withdrawal depends on the user's available points.
+Never invent a maximum amount.
+
+3. SUPPORTED WALLETS:
+The supplied wallet list is:
+PAY-IN WALLETS:
+- PhonePe
+- Paytm
+- MobiKwik
+- Freecharge
+
+BUSINESS WALLETS (RECOMMENDED):
+- Google Pay Business
+- PhonePe Business
+- Paytm Business
+Business wallets are recommended for smoother collections.
+
+IMPORTANT:
+The supplied list is labelled Pay-in wallets.
+Do not confidently claim that these wallets are confirmed withdrawal methods unless verified
+from the application's actual withdrawal options.
+If the user asks specifically which wallets can be used to withdraw, explain only verified
+information or ask them to check the withdrawal wallet options in their application.
+
+4. NORMAL WITHDRAWAL PROCESSING TIME:
+A normal withdrawal generally takes around 5–10 minutes.
+Do not guarantee that every withdrawal will complete within this time.
+
+5. WITHDRAWAL_PENDING:
+Meaning: An order is currently being processed and is pending payment from another user.
+This usually takes approximately 10–15 minutes. Explain this clearly and simply.
+
+6. WITHDRAWAL_LOCKED:
+A withdrawal/order wallet may become locked because of an unstable connection or logging out
+during a transaction.
+
+7. REASONS FOR WITHDRAWAL LOCKING:
+Possible reasons include:
+- Unusual activity
+- Logging into the wallet from another device
+Do not claim these are the only possible causes.
+
+8. HOW TO RESOLVE A LOCKED WITHDRAWAL:
+Guide the user to relink their wallet in the app.
+The system will process the locked order after the wallet is relinked.
+Give clear, simple step-by-step instructions if the user asks how.
+
+9. WITHDRAWAL PENDING FOR A LONG TIME:
+Advise the user to contact Customer Support and provide their Order ID.
+
+10. WITHDRAWAL FAILED:
+A new order will be placed.
+Do not invent additional recovery procedures.
+If the user still has a problem, advise them to contact Customer Support.
+
+11. WITHDRAWAL CANCELLATION:
+No confirmed cancellation policy is provided in this knowledge base.
+Do not invent an answer.
+If a user asks whether a withdrawal can be cancelled, direct them to Customer Support.
+
+12. INFORMATION FOR WITHDRAWAL SUPPORT:
+When a user reports a withdrawal problem, ask for relevant details such as:
+- UID
+- Order ID
+- Screenshot showing the withdrawal/order status
+- Clear explanation of the issue
+Do not request passwords, OTPs, UPI PINs or sensitive authentication details.
+
+==================================================
+MULTILINGUAL AI REQUIREMENTS & CODE-MIXING
+==================================================
+Users can ask questions in different languages: English, Telugu, Hindi, Tamil,
+Kannada, Malayalam, and other languages. They may use spelling mistakes (e.g. "referal",
+"withdrow", "amout", "frnd", "pendng"), slang, informal words, abbreviations, or
+mixed languages (e.g. Hinglish, Tenglish).
+
+The AI must:
+1. Detect the user's language and script automatically.
+2. Understand spelling errors and informal typing.
+3. Understand mixed-language messages (e.g. "Referal amout kab milega?", "support kaha milega",
+   "How to invite frnd", "Withdraw ela cheyali?", "My payment deducted but not credited.",
+   "Payment success aindi kani balance raledu.", "मेरा पेमेंट कट गया लेकिन क्रेडिट नहीं हुआ।",
+   "Withdrawal pending hai.", "Withdraw avvatledu bro.", "Order lock ayindi ela solve cheyali?").
+4. Translate internally if needed to understand the user's intent.
+5. Identify the correct question and category.
+6. Retrieve answers ONLY from the official knowledge base above.
+7. Respond in the SAME LANGUAGE that the user used:
+   - If user asks in Telugu (e.g. "నా రిఫరల్ బోనస్ రాలేదు"), respond in Telugu explaining
+     Assets → Bonus → Referral Banner → View Detail.
+   - If user asks in Hindi/Hinglish (e.g. "Referal amout kab milega?"), respond in Hindi/Hinglish
+     explaining the 15 orders requirement and automatic credit (Referred: ₹100, Referrer: ₹50).
+   - If user asks in informal English (e.g. "How to invite frnd"), explain iPAY App → Team
+     section → copy and share referral link.
+   - If user asks "support kaha milega", answer in Hindi/Hinglish explaining 24/7 admin support
+     via official group or DM with 3-5 min usual response time.
+   - If user asks "My payment deducted but not credited.", ask to check status in their payment app
+     (Pending/Failed/Successful) and advise contacting Customer Support if needed.
+   - If user asks "Payment success aindi kani balance raledu.", respond in Telugu: పేమెంట్ యాప్‌లో
+     స్టేటస్ చెక్ చేయండి మరియు కస్టమర్ సపోర్ట్‌కి పేమెంట్ స్క్రీన్‌షాట్, ఆర్డర్ వివరాలు అందించండి.
+   - If user asks "मेरा पेमेंट कट गया लेकिन क्रेडिट नहीं हुआ।", respond in Hindi: अपने पेमेंट ऐप में
+     स्टेटस चेक करें और कस्टमर सपोर्ट से पेमेंट स्क्रीनशॉट व आर्डर डिटेल्स के साथ संपर्क करें।
+   - If user asks "Withdrawal pending hai.", explain in Hindi/Hinglish: Withdrawal order process ho raha hai
+     aur dusre user ke payment ke liye pending hai (~10–15 minutes).
+   - If user asks "Withdraw avvatledu bro.", respond in Telugu/Tenglish: Minimum withdrawal ₹100, maximum
+     points aadharanga untundi (~5–10 minutes normal ga). Problem unte UID & Order ID tho support ni contact cheyandi.
+   - If user asks "Order lock ayindi ela solve cheyali?", respond in Telugu: iPAY యాప్‌లో మీ వాలెట్‌ను
+     రీలింక్ (relink) చేయండి. వాలెట్ రీలింక్ అయిన తర్వాత సిస్టమ్ లాక్ అయిన ఆర్డర్‌ను ప్రాసెస్ చేస్తుంది.
+8. Use simple, friendly, and natural language.
+9. Keep answers concise and easy to understand.
+10. Give step-by-step instructions when needed.
+11. Ask clarification questions when the user's meaning is unclear.
+12. Never make up iPAY policies, rewards, amounts, fees, processing times, or eligibility rules.
+13. If the user asks about an unknown or account-specific matter, politely guide them to human support.
+
+==================================================
 SCREENSHOT CLASSIFICATION RULES
 ==================================================
 When a user uploads an image, inspect the actual visible content. Categories:
@@ -1435,6 +1676,36 @@ def get_history(chat_id: int) -> List[Dict[str, str]]:
     return [{"role": role, "content": content} for role, content in rows]
 
 
+def _clear_conversation_history(chat_id: int) -> None:
+    """Delete all stored conversation messages for a user/chat."""
+    if supabase_enabled():
+        supabase_client().table("messages").delete().eq("chat_id", chat_id).execute()
+        return
+    with closing(db()) as conn:
+        conn.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,))
+        conn.commit()
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear the user's AI conversation history (/reset or /clear)."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat:
+        return
+    chat_id = chat.id
+    try:
+        await asyncio.to_thread(_clear_conversation_history, chat_id)
+        await message.reply_text(
+            "✅ Your conversation history has been cleared.\n\n"
+            "You can start a fresh question now — just type your question or use /ask."
+        )
+    except Exception as exc:
+        log.warning("Conversation history reset failed for chat %s: %s", chat_id, type(exc).__name__)
+        await message.reply_text(
+            "⚠️ Could not clear conversation history. Please try again shortly."
+        )
+
+
 async def _async_add_conversation_turn(
     chat_id: int, question: str, answer: str
 ) -> None:
@@ -1978,17 +2249,28 @@ def _normalize_transition_information_ocr(normalized_text: str) -> str:
         (r"\btask\s+(?:1d|10)\b", "task id"),
         (r"\border\s+(?:1d|10)\b", "order id"),
         (r"\b(?:gok|bonk|bak)\s+nome\b", "bank name"),
+        (r"\bbank\s+narre\b", "bank name"),
+        (r"\bayee\s+vpa\b", "payee vpa"),
         (r"\b(?:peyee|poyee)\b", "payee"),
         (r"\bpoyer\b", "payer"),
+        (r"\bwoder\s+art\b", "order amt"),
         (r"\b(?:onder|order)\s+(?:arr|art|arma)\b", "order amt"),
         (r"\b(?:acme|acmel)\s+ari\b", "actual amt"),
         (r"\b(?:acme|acmel)\s+art\b", "actual amt"),
+        (r"\bactual\s+amt\s+receive\b", "actual amt received"),
         (r"\brecetved\b", "received"),
+        (r"\bfeceived\b", "received"),
         (r"\brroerved\b", "received"),
         (r"\bocking\b", "locking"),
     )
     for pattern, replacement in corrections:
         normalized_text = re.sub(pattern, replacement, normalized_text)
+    if _is_transition_information_layout(normalized_text):
+        normalized_text = re.sub(
+            r"\b(?:itf|tr|te)\s+([a-z0-9]{6,})\b",
+            r"utr \1",
+            normalized_text,
+        )
     return normalized_text
 
 
@@ -2069,7 +2351,15 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
         # Telegram photo compression and Render's lower-CPU Tesseract build can
         # drop individual field labels. Keep UTR as the user's primary signal,
         # and require category-specific fields to protect unrelated screens.
-        if has_populated_utr and order_field_signals >= 1:
+        order_completion_evidence = (
+            re.search(r"\btask\s+id\b", normalized)
+            and re.search(r"\bpaid\b", normalized)
+            and re.search(r"\bfilling\s+in\s+utr\b", normalized)
+            and re.search(r"\bvoucher\b", normalized)
+        )
+        if has_populated_utr and (
+            order_field_signals >= 1 or order_completion_evidence
+        ):
             return "order"
         if not has_populated_utr and withdrawal_field_signals >= 2:
             return "withdrawal"
@@ -2183,6 +2473,9 @@ def _is_withdrawal_locked_list_layout(normalized_text: str, text: str) -> bool:
 
 
 def _is_order_locked_list_layout(normalized_text: str, text: str) -> bool:
+    has_waiting_for_processing = bool(
+        re.search(r"\bwaiting\s+for(?:\s+\w{1,4})?\s+processing\b", normalized_text)
+    )
     return bool(
         re.search(r"\binr\b", normalized_text)
         and re.search(r"\busdt\b", normalized_text)
@@ -2192,7 +2485,7 @@ def _is_order_locked_list_layout(normalized_text: str, text: str) -> bool:
         and re.search(r"\bactivity\b", normalized_text)
         and _has_transaction_record_fields(normalized_text)
         and re.search(r"\bfeedback\s+received\b", normalized_text)
-        and re.search(r"\bwaiting\s+for\s+processing\b", normalized_text)
+        and has_waiting_for_processing
         and re.search(r"\bproceed\b", normalized_text)
         and re.search(r"\b\d{1,2}:\d{2}:\d{2}\b", text)
     )
@@ -2585,6 +2878,159 @@ def _resolve_tesseract_command(configured: Optional[str] = None) -> Optional[str
     return None
 
 
+def _latest_forwarded_panel_crop(image, pytesseract):
+    """Crop only the latest forwarded image panel in a tall Telegram capture."""
+    from PIL import Image, ImageOps
+    from pytesseract import Output
+
+    if image.height < image.width * 1.4:
+        return None
+
+    prepared = _preprocess_screenshot_for_ocr(image)
+    data = pytesseract.image_to_data(
+        prepared,
+        lang="eng",
+        config="--psm 11",
+        output_type=Output.DICT,
+        timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+    )
+    scale_x = prepared.width / image.width
+    scale_y = prepared.height / image.height
+    lines = {}
+    for index, value in enumerate(data["text"]):
+        word = re.sub(r"[^a-z]+", "", value.casefold())
+        if not word:
+            continue
+        key = (
+            data["block_num"][index],
+            data["par_num"][index],
+            data["line_num"][index],
+        )
+        lines.setdefault(key, []).append(index)
+
+    forwarded_lines = []
+    for indexes in lines.values():
+        words = [re.sub(r"[^a-z]+", "", data["text"][i].casefold()) for i in indexes]
+        if any(
+            words[position : position + 2] == ["forwarded", "from"]
+            for position in range(max(0, len(words) - 1))
+        ):
+            forwarded_lines.append(indexes)
+    if not forwarded_lines:
+        return None
+
+    latest_line = max(
+        forwarded_lines,
+        key=lambda indexes: max(data["top"][i] for i in indexes),
+    )
+    marker_bottom = max(
+        data["top"][i] + data["height"][i] for i in latest_line
+    )
+    marker_left = min(data["left"][i] for i in latest_line)
+    left = max(0, int(marker_left / scale_x) - 20)
+    top = min(image.height, int(marker_bottom / scale_y) + 30)
+    right = image.width
+    if top >= image.height - 160:
+        return None
+
+    grayscale = ImageOps.grayscale(image)
+    row_band = grayscale.crop((left, top, right, image.height))
+    row_means = row_band.resize(
+        (1, row_band.height), Image.Resampling.BOX
+    ).load()
+    dark_start = None
+    dark_run = 0
+    for offset in range(row_band.height):
+        brightness = row_means[0, offset]
+        if offset < 60:
+            continue
+        if brightness < 115:
+            dark_run += 1
+            if dark_run == 1:
+                dark_start = offset
+            if dark_run >= 18:
+                bottom = top + dark_start - 3
+                if bottom >= top + 160:
+                    return image.crop((left, top, right, bottom))
+                break
+        else:
+            dark_run = 0
+            dark_start = None
+
+    return image.crop((left, top, right, image.height))
+
+
+def _ocr_latest_forwarded_panel(crop, pytesseract) -> str:
+    from PIL import Image, ImageOps
+
+    grayscale = ImageOps.grayscale(crop)
+    scale = min(3.0, 1800 / max(1, grayscale.width))
+    if scale > 1:
+        grayscale = grayscale.resize(
+            (
+                max(1, int(grayscale.width * scale)),
+                max(1, int(grayscale.height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+    text = pytesseract.image_to_string(
+        grayscale,
+        lang="eng",
+        config="--psm 6",
+        timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+    )
+    focused = crop.crop(
+        (
+            0,
+            int(crop.height * 0.20),
+            int(crop.width * 0.925),
+            max(int(crop.height * 0.42), int(crop.height * 0.20) + 1),
+        )
+    )
+    focused = ImageOps.grayscale(focused)
+    focused = ImageOps.autocontrast(focused, cutoff=1)
+    focused = focused.resize(
+        (max(1, focused.width * 3), max(1, focused.height * 3)),
+        Image.Resampling.LANCZOS,
+    )
+    focused_text = pytesseract.image_to_string(
+        focused,
+        lang="eng",
+        config="--psm 6",
+        timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+    )
+    sparse_text = pytesseract.image_to_string(
+        grayscale,
+        lang="eng",
+        config="--psm 11",
+        timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+    )
+    stamp = crop.crop(
+        (
+            int(crop.width * 0.52),
+            int(crop.height * 0.38),
+            crop.width,
+            int(crop.height * 0.86),
+        )
+    )
+    stamp = ImageOps.grayscale(stamp)
+    stamp = stamp.resize(
+        (max(1, stamp.width * 3), max(1, stamp.height * 3)),
+        Image.Resampling.LANCZOS,
+    )
+    stamp_text = pytesseract.image_to_string(
+        stamp,
+        lang="eng",
+        config="--psm 11",
+        timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
+    )
+    return "\n".join(
+        part
+        for part in (text, focused_text, sparse_text, stamp_text)
+        if part.strip()
+    )
+
+
 def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
     from PIL import Image
     import pytesseract
@@ -2598,6 +3044,9 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
     pytesseract.pytesseract.tesseract_cmd = command
     with Image.open(io.BytesIO(image_bytes)) as image:
         try:
+            forwarded_crop = _latest_forwarded_panel_crop(image, pytesseract)
+            if forwarded_crop is not None:
+                return _ocr_latest_forwarded_panel(forwarded_crop, pytesseract)
             prepared = _preprocess_screenshot_for_ocr(image)
             text = pytesseract.image_to_string(
                 prepared,
@@ -5367,15 +5816,46 @@ async def _ai_answer(
 def _ai_unavailable_answer(question: str, guide: Guide) -> str:
     """Give useful local guidance when the answer provider is unavailable."""
     normalized = question.casefold()
-    if re.search(r"\b(withdraw(?:al|als)?|payout|cash[ -]?out)\b", normalized):
+    if re.search(r"\b(withdraw(?:al|als)?|payout|cash[ -]?out|minimum\s+withdraw|order\s+lock|avvatledu)\b", normalized):
         return (
-            f"{ICON_PIN} I can't reach the answer service right now, but here are the "
-            "withdrawal checks:\n\n"
-            f"{ICON_CHECK} Check that your receiving limit has not been reached.\n"
-            f"{ICON_CHECK} Confirm UPI is enabled and your account can receive funds.\n"
-            f"{ICON_CHECK} Check that your wallet is connected in the iPay app.\n"
-            f"{ICON_CHECK} Do not submit a duplicate withdrawal.\n"
-            f"{ICON_ARROW} Share your UID and order reference with support to check the pending order."
+            f"{ICON_PIN} I can't reach the answer service right now, but here are the withdrawal guidelines:\n\n"
+            f"{ICON_CHECK} Minimum withdrawal: ₹100. Maximum: depends on your available points.\n"
+            f"{ICON_CHECK} Normal processing time: ~5–10 minutes. (Pending: order pending from another user, ~10–15 mins).\n"
+            f"{ICON_CHECK} Locked withdrawal: Caused by unstable connection or logging out; relink your wallet in the app to process.\n"
+            f"{ICON_CHECK} Failed withdrawal: A new order will be placed automatically.\n"
+            f"{ICON_ARROW} For persistent issues, contact Customer Support with UID, Order ID, screenshot, and explanation."
+        )
+
+    if re.search(r"\b(deducted|not\s+credited|payment\s+failed|pending\s+payment|bills\s+section|incorrect\s+payment|కట్|कट\s+गया)\b", normalized):
+        return (
+            f"{ICON_PIN} I can't reach the answer service right now, but here is the payment issues guide:\n\n"
+            f"{ICON_CHECK} Deducted but not credited: Check payment app status (Pending/Failed/Successful).\n"
+            f"{ICON_CHECK} If Pending in your banking app: Contact your bank/payment provider.\n"
+            f"{ICON_CHECK} If Successful but not reflected: Contact Customer Support with payment screenshot and order details.\n"
+            f"{ICON_CHECK} Missing proof: Use the Bills section in the iPAY app to provide payment verification proof.\n"
+            f"{ICON_CHECK} Pay-in wallets: PhonePe, Paytm, MobiKwik, Freecharge (Business wallets recommended: Google Pay Business, PhonePe Business, Paytm Business).\n"
+            f"{ICON_ARROW} Avoid UPI mistakes; never share passwords, OTPs, or UPI PINs."
+        )
+
+    if re.search(r"\b(referr?al|refrel|refferal|invite|inviting|team\s+link|bonus\s+banner|రిఫరల్|रेफरल)\b", normalized):
+        return (
+            f"{ICON_PIN} I can't reach the answer service right now, but here is the referral guide:\n\n"
+            f"{ICON_CHECK} How to invite: Open iPAY App → Team section → copy and share your referral link.\n"
+            f"{ICON_CHECK} Requirements: Invited user must complete 15 orders after registration.\n"
+            f"{ICON_CHECK} Rewards: ₹100 for referred user, ₹50 for referrer (credited automatically).\n"
+            f"{ICON_CHECK} Missing reward: Open iPAY App → Assets → Bonus → Referral Banner → View Detail.\n"
+            f"{ICON_CHECK} Existing users cannot be referred again. No upper limit on referrals.\n"
+            f"{ICON_ARROW} If referral is not showing, check your internet connection or switch networks."
+        )
+
+    if re.search(r"\b(what\s+is\s+ipay|general\s+support|support\s+(?:kaha|kahan|help|admin)|admin\s+contact)\b", normalized):
+        return (
+            f"{ICON_PIN} I can't reach the answer service right now, but here is iPAY general support info:\n\n"
+            f"{ICON_CHECK} What is iPAY: Earn money by placing orders (e.g. ₹1,000 order = ₹1,040 including 4% commission).\n"
+            f"{ICON_CHECK} 24/7 Support: Contact available admins via the official group or direct messages (DMs).\n"
+            f"{ICON_CHECK} Usual response time: Approximately 3–5 minutes (not guaranteed if busy).\n"
+            f"{ICON_CHECK} When reporting: Provide UID, screenshot of the issue, and clear explanation.\n"
+            f"{ICON_ARROW} Never share passwords, OTPs, or UPI PINs."
         )
 
     try:
@@ -5600,6 +6080,8 @@ async def _post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Show the iPay welcome menu"),
         BotCommand("boost", "Mention your six-digit UID; one request every five minutes"),
+        BotCommand("ask", "Ask any iPAY support question"),
+        BotCommand("reset", "Clear your AI conversation history and start fresh"),
     ]
     scopes = (
         BotCommandScopeDefault(),
@@ -5753,6 +6235,8 @@ def build_application(
     application.add_handler(CommandHandler("qassign", qassign_command))
     application.add_handler(CommandHandler("dailyreport", dailyreport_command))
     application.add_handler(CommandHandler("unanswered", unanswered_command))
+    application.add_handler(CommandHandler("ask", ask_command))
+    application.add_handler(CommandHandler(["reset", "clear"], reset_command))
     application.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, group_screenshot_handler),
         group=-2,

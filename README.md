@@ -243,3 +243,71 @@ The report includes message/question totals, categories and statuses, all indivi
 ```
 
 Tests use SQLite and mocked APIs. A live Supabase migration, Telegram delivery, and hosted Cron run require the project's external credentials and must be verified after deployment.
+
+
+## AI Customer Support Feature
+
+### How it works
+
+Every plain text message sent to the bot (private or group, excluding commands) is routed through the AI support handler (`ai_reply` → `_ai_answer` → `_gemini_answer`). Gemini receives the user's question alongside:
+
+- Relevant excerpts from `knowledge_base.md` and the iPAY User Guide (retrieved via TF-IDF from `Guide`)
+- The last 12 messages of the user's conversation history (per-chat context)
+- A system prompt (`SYSTEM_RULES`) defining iPAY-specific behaviour, tone, and safety rules
+
+Replies are streamed back to Telegram. Each reply appends the configured human escalation contacts (`SUPPORT_1`, `SUPPORT_2`, `SUPPORT_3`, `ADMIN_USER_IDS`).
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/ask <question>` | Ask any iPAY support question (also works by typing freely) |
+| `/reset` or `/clear` | Clear your AI conversation history and start a fresh context |
+
+### Required environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMINI_API_KEY` | _(required)_ | Google Gemini API key |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model to use |
+| `AI_ENABLED` | `true` | Set `false` to disable AI chat replies (screenshot Vision is unaffected) |
+| `AI_MAX_OUTPUT_TOKENS` | `300` | Maximum tokens per reply |
+| `AI_TIMEOUT_SECONDS` | `45` | Per-request Gemini timeout in seconds |
+| `SCREENSHOT_GEMINI_CONFIDENCE_THRESHOLD` | `0.90` | Vision confidence threshold for screenshot classification |
+
+### How to disable AI replies
+
+Set `AI_ENABLED=false` in `.env` (or Render's environment) and restart. Screenshot classification (ORDER_LOCKED, WITHDRAWAL_LOCKED, WITHDRAWAL_PENDING) is **not** affected — it uses a separate Vision call regardless of `AI_ENABLED`.
+
+Admins can also toggle AI per-group at runtime using the `ai_group:<chat_id>` setting.
+
+### How to update FAQs and knowledge
+
+- **`knowledge_base.md`** — Add or edit Markdown Q&A sections. Restart the bot; the guide is loaded at startup.
+- **`I_PAY_User_Guide.pdf`** — Replace with an updated PDF. The bot parses it at startup.
+- **`problem_resolutions.json`** — Add structured resolution entries.
+- **`/faq` admin command** — Manage knowledge entries at runtime (admin only).
+
+### Human escalation
+
+The bot appends support contact details to every Gemini reply. Configure via:
+
+```
+SUPPORT_1=@handle_or_number
+SUPPORT_2=@handle_or_number
+SUPPORT_3=@handle_or_number
+ADMIN_USER_IDS=123456789,987654321
+```
+
+### Known limitations
+
+- The bot has no access to live transaction data, balances, or account status.
+- Tesseract OCR is required locally for screenshot classification (`apt-get install tesseract-ocr`). Docker and Render deploy it automatically.
+- Gemini Vision screenshot classification requires `GEMINI_API_KEY`. Without it, classification falls back to Tesseract-only rules.
+- Conversation history is per-chat (last 12 messages). `/reset` or `/clear` clears the history for the current chat.
+
+### Running tests
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
