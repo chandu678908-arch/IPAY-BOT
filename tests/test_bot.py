@@ -666,6 +666,7 @@ class BotTests(unittest.TestCase):
         fake_pytesseract.image_to_string.assert_called_once_with(
             fake_image,
             lang="eng",
+            config="--psm 6",
             timeout=bot.SCREENSHOT_OCR_TIMEOUT_SECONDS,
         )
 

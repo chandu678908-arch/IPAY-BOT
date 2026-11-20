@@ -2571,10 +2571,14 @@ def _tesseract_ocr_bytes(image_bytes: bytes) -> str:
             text = pytesseract.image_to_string(
                 prepared,
                 lang="eng",
+                config="--psm 6",
                 timeout=SCREENSHOT_OCR_TIMEOUT_SECONDS,
             )
             normalized = re.sub(r"[^a-z]+", " ", text.casefold())
-            if re.search(r"\btransition\s+information\b", normalized):
+            if (
+                re.search(r"\btransition\s+information\b", normalized)
+                and not _classify_transition_information_lock(text)
+            ):
                 from PIL import ImageOps
 
                 # Transition screens are often shared at narrow resolutions.
