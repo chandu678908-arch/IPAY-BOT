@@ -322,6 +322,87 @@ class BotTests(unittest.TestCase):
             self.assertIn(selected, templates)
             self.assertEqual(bot._classify_screenshot(ocr), category)
 
+    def test_visual_lock_stamp_recovers_structured_withdrawal_transition(self):
+        from PIL import ImageDraw
+
+        withdrawal_ocr = (
+            "Transition Information Task ID pi_123456789 Order ID 6AAA00000001 "
+            "UTR ia Expire Time 17:35:57 16/11/2026 "
+            "Bank Name Payee VPA samplebank demo@upi "
+            "Payee Card ID Payer Name 123456 Demo User "
+            "Payer Account Order Amt 5000.00 Actual Amt Received "
+            "4999.99 -5000.00 INR"
+        )
+        self.assertIsNone(bot._classify_screenshot(withdrawal_ocr))
+
+        image = Image.new("RGB", (578, 1280), "white")
+        draw = ImageDraw.Draw(image)
+        draw.ellipse(
+            (387, 742, 523, 859),
+            outline=(238, 110, 115),
+            width=18,
+        )
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        image_bytes = encoded.getvalue()
+        self.assertTrue(bot._has_transition_locking_stamp(image_bytes))
+
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            bot=SimpleNamespace(
+                send_message=AsyncMock(),
+                delete_message=AsyncMock(),
+            ),
+        )
+        message = SimpleNamespace(
+            message_id=990,
+            photo=[SimpleNamespace(file_id="visual-lock-stamp")],
+            document=None,
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=990, type="private"),
+            effective_user=SimpleNamespace(id=991),
+        )
+
+        async def scenario():
+            with (
+                patch.object(
+                    bot,
+                    "_download_screenshot_bytes",
+                    new=AsyncMock(return_value=image_bytes),
+                ),
+                patch.object(
+                    bot,
+                    "_read_screenshot_text",
+                    new=AsyncMock(return_value=withdrawal_ocr),
+                ),
+                patch.object(bot, "_track_issue_spike", new=AsyncMock()),
+            ):
+                await bot.group_screenshot_handler(update, context)
+
+        with patch.object(bot, "DB_PATH", self.root / "visual-lock-stamp.sqlite3"):
+            asyncio.run(scenario())
+
+        context.bot.send_message.assert_awaited_once()
+        self.assertIn(
+            context.bot.send_message.await_args.kwargs["text"],
+            bot.WITHDRAWAL_IMAGE_REPLIES,
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "Transition Information Task ID 1 Order ID 2 Bank Name "
+                "Payee VPA",
+                visual_locking_stamp=True,
+            )
+        )
+        self.assertIsNone(
+            bot._classify_screenshot(
+                "iPAY Dashboard account balance 5000 Withdrawal menu",
+                visual_locking_stamp=True,
+            )
+        )
+
     def test_gemini_vision_must_agree_with_validated_ocr_candidate(self):
         image_buffer = BytesIO()
         Image.new("RGB", (32, 32), "white").save(image_buffer, format="PNG")

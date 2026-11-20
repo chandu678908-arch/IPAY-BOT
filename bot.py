@@ -2412,6 +2412,37 @@ def _is_transition_information_layout(normalized_text: str) -> bool:
     return bool(re.search(r"\btransition\s+information\b", normalized_text))
 
 
+def _has_transition_locking_stamp(image_bytes: bytes) -> bool:
+    """Detect the red lock stamp in the fixed lower-right transaction area."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        if source.height < source.width * 1.4:
+            return False
+        image = source.convert("RGB")
+        crop = image.crop(
+            (
+                int(image.width * 0.55),
+                int(image.height * 0.50),
+                int(image.width * 0.98),
+                int(image.height * 0.78),
+            )
+        )
+        pixels = crop.load()
+        red_pixels = 0
+        for y in range(crop.height):
+            for x in range(crop.width):
+                red, green, blue = pixels[x, y]
+                if (
+                    red >= 150
+                    and red >= green * 1.25
+                    and red >= blue * 1.15
+                    and green <= 210
+                ):
+                    red_pixels += 1
+        return red_pixels >= max(300, int(crop.width * crop.height * 0.03))
+
+
 def _normalize_transition_information_ocr(normalized_text: str) -> str:
     """Correct common Tesseract confusions in the narrow transition layout."""
     corrections = (
@@ -2488,12 +2519,20 @@ def _has_populated_transition_utr(normalized_text: str) -> bool:
     )
 
 
-def _classify_transition_information_lock(text: str) -> Optional[str]:
+def _classify_transition_information_lock(
+    text: str,
+    *,
+    visual_locking_stamp: bool = False,
+) -> Optional[str]:
     normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold())
     normalized = _normalize_transition_information_ocr(normalized)
     has_populated_utr = _has_populated_transition_utr(normalized)
     has_transition_heading = _is_transition_information_layout(normalized)
-    has_lock_status = bool(re.search(r"\b(?:locked|locking)\b", normalized))
+    ocr_lock_status = bool(
+        re.search(r"\b(?:locked|locking)\b", normalized)
+    )
+    visual_only_lock_status = visual_locking_stamp and not ocr_lock_status
+    has_lock_status = visual_locking_stamp or ocr_lock_status
     order_field_signals = sum(
         bool(re.search(pattern, normalized))
         for pattern in (
@@ -2526,11 +2565,16 @@ def _classify_transition_information_lock(text: str) -> Optional[str]:
             and re.search(r"\bfilling\s+in\s+utr\b", normalized)
             and re.search(r"\bvoucher\b", normalized)
         )
+        minimum_order_fields = 3 if visual_only_lock_status else 1
         if has_populated_utr and (
-            order_field_signals >= 1 or order_completion_evidence
+            order_field_signals >= minimum_order_fields or order_completion_evidence
         ):
             return "order"
-        if not has_populated_utr and withdrawal_field_signals >= 2:
+        minimum_withdrawal_fields = 4 if visual_only_lock_status else 2
+        if (
+            not has_populated_utr
+            and withdrawal_field_signals >= minimum_withdrawal_fields
+        ):
             return "withdrawal"
     if not has_transition_heading:
         # Do not let a regular task-payment screen become a transition-lock
@@ -2660,10 +2704,17 @@ def _is_order_locked_list_layout(normalized_text: str, text: str) -> bool:
     )
 
 
-def _classify_locked_screenshot(text: str) -> Optional[str]:
+def _classify_locked_screenshot(
+    text: str,
+    *,
+    visual_locking_stamp: bool = False,
+) -> Optional[str]:
     """Require a transaction-specific locking status and supporting record fields."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
-    transition_category = _classify_transition_information_lock(text)
+    transition_category = _classify_transition_information_lock(
+        text,
+        visual_locking_stamp=visual_locking_stamp,
+    )
     if transition_category:
         return transition_category
     if _is_transition_information_layout(normalized):
@@ -2687,10 +2738,17 @@ def _classify_locked_screenshot(text: str) -> Optional[str]:
     return None
 
 
-def _classify_screenshot(text: str) -> Optional[str]:
+def _classify_screenshot(
+    text: str,
+    *,
+    visual_locking_stamp: bool = False,
+) -> Optional[str]:
     """Classify only transaction-specific locking and pending status evidence."""
     normalized = re.sub(r"[^a-z]+", " ", text.casefold())
-    transition_category = _classify_transition_information_lock(text)
+    transition_category = _classify_transition_information_lock(
+        text,
+        visual_locking_stamp=visual_locking_stamp,
+    )
     if transition_category:
         return transition_category
     if _is_transition_information_layout(normalized):
@@ -3719,7 +3777,28 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         )
         await release_image_cooldown("unreadable_ocr")
         return
-    category = _classify_screenshot(ocr_text)
+    normalized_ocr_text = re.sub(r"[^a-z0-9]+", " ", ocr_text.casefold())
+    visual_locking_stamp = False
+    if (
+        _is_transition_information_layout(normalized_ocr_text)
+        and not re.search(r"\b(?:locked|locking)\b", normalized_ocr_text)
+    ):
+        try:
+            visual_locking_stamp = await asyncio.to_thread(
+                _has_transition_locking_stamp,
+                image_bytes,
+            )
+        except (OSError, ValueError) as exc:
+            log.warning(
+                "Could not inspect Transition Information lock stamp "
+                "(message_id=%s, error=%s)",
+                message.message_id,
+                type(exc).__name__,
+            )
+    category = _classify_screenshot(
+        ocr_text,
+        visual_locking_stamp=visual_locking_stamp,
+    )
     if not category:
         if _is_technical_error_screenshot(ocr_text):
             log.info(
@@ -3763,7 +3842,11 @@ async def group_screenshot_handler(update: Update, context: ContextTypes.DEFAULT
         return
     strict_locked_match = (
         category in {"order", "withdrawal"}
-        and _classify_locked_screenshot(ocr_text) == category
+        and _classify_locked_screenshot(
+            ocr_text,
+            visual_locking_stamp=visual_locking_stamp,
+        )
+        == category
     )
     gemini_client = context.application.bot_data.get("gemini_client")
     if gemini_client and strict_locked_match:

@@ -21,8 +21,10 @@ The bot does not perform, accelerate, or verify withdrawals. Boost replies are a
    classifications are ignored without an automatic reply. Locking replies
    require a supported transaction-page layout: category-specific Transition
    Information fields or date/status filters with transaction-record labels.
-   Isolated navigation labels, summary totals, monetary values, and status
-   words do not qualify.
+   On Transition Information pages, a visible red locking stamp can supply
+   lock-status evidence when OCR misses its text, but only alongside the heading
+   and sufficient category-specific transaction fields. Isolated navigation
+   labels, summary totals, monetary values, and status words do not qualify.
    Explicit technical-error notices such as `Network error`, `Failed to load`,
    or `Something went wrong` receive generic troubleshooting guidance; an
    isolated `error` keyword is not enough.
